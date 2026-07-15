@@ -55,3 +55,24 @@ CodeCoverage/
 *.VisualState.xml
 TestResult.xml
 nunit-*.xml
+
+# IDE settings
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Frontend dependencies and build output
+node_modules/
+dist/
+
+# Local development data and configuration
+data/*.db
+data/*.db-shm
+data/*.db-wal
+appsettings.Development.local.json
+
+# JavaScript test output
+coverage/
+playwright-report/
+test-results/
