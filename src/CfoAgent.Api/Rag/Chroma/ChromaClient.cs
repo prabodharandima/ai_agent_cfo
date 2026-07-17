@@ -2,13 +2,16 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using CfoAgent.Api.Configuration;
+using System.Diagnostics;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Rag.Chroma;
 
-public sealed class ChromaClient(HttpClient httpClient, IOptions<ChromaOptions> options)
+public sealed class ChromaClient(HttpClient httpClient, IOptions<ChromaOptions> options, ILogger<ChromaClient>? logger = null)
 {
     private readonly ChromaOptions _options = options.Value;
+    private readonly ILogger<ChromaClient> _logger = logger ?? NullLogger<ChromaClient>.Instance;
 
     public async Task HeartbeatAsync(CancellationToken cancellationToken = default)
     {
@@ -140,16 +143,21 @@ public sealed class ChromaClient(HttpClient httpClient, IOptions<ChromaOptions> 
 
     private async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        var stopwatch = Stopwatch.StartNew();
         try
         {
-            return await httpClient.SendAsync(request, cancellationToken);
+            var response = await httpClient.SendAsync(request, cancellationToken);
+            _logger.LogDebug("ChromaDB request completed. Method: {Method}; StatusCode: {StatusCode}; DurationMilliseconds: {DurationMilliseconds}", request.Method.Method, (int)response.StatusCode, stopwatch.ElapsedMilliseconds);
+            return response;
         }
         catch (HttpRequestException exception)
         {
+            _logger.LogWarning("ChromaDB request failed. FailureType: {FailureType}; DurationMilliseconds: {DurationMilliseconds}", exception.GetType().Name, stopwatch.ElapsedMilliseconds);
             throw new ChromaDependencyException("ChromaDB is unavailable.", innerException: exception);
         }
         catch (TaskCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
+            _logger.LogWarning("ChromaDB request timed out. DurationMilliseconds: {DurationMilliseconds}", stopwatch.ElapsedMilliseconds);
             throw new ChromaDependencyException("ChromaDB request timed out.", innerException: exception);
         }
     }

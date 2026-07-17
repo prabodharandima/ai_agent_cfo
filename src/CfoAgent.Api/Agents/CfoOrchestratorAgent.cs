@@ -1,6 +1,8 @@
 using System.Text.Json;
+using System.Diagnostics;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CfoAgent.Api.Agents;
 
@@ -8,9 +10,11 @@ public sealed class CfoOrchestratorAgent(
     SalesAnalysisAgent salesAnalysisAgent,
     ForecastingAgent forecastingAgent,
     FinancialKnowledgeAgent financialKnowledgeAgent,
-    CfoAgentFramework agentFramework)
+    CfoAgentFramework agentFramework,
+    ILogger<CfoOrchestratorAgent>? logger = null)
 {
     private const int MaximumSpecialistInvocations = 2;
+    private readonly ILogger<CfoOrchestratorAgent> _logger = logger ?? NullLogger<CfoOrchestratorAgent>.Instance;
 
     public async Task<CfoIntent> ClassifyAsync(string message, CancellationToken cancellationToken = default)
     {
@@ -30,9 +34,11 @@ public sealed class CfoOrchestratorAgent(
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Message);
 
+        var stopwatch = Stopwatch.StartNew();
         try
         {
             var intent = await ClassifyAsync(request.Message, cancellationToken);
+            _logger.LogInformation("CFO request routed. Intent: {Intent}", intent);
             var specialistResults = intent switch
             {
                 CfoIntent.SalesSummary => [await salesAnalysisAgent.GetWeeklySummaryAsync(request, cancellationToken)],
@@ -44,16 +50,24 @@ public sealed class CfoOrchestratorAgent(
                 _ => Array.Empty<AgentResult>()
             };
 
-            return specialistResults.Length == 0
+            var result = specialistResults.Length == 0
                 ? UnsupportedResult()
                 : await ComposeAsync(specialistResults, cancellationToken);
+            _logger.LogInformation(
+                "CFO request completed. ResponseType: {ResponseType}; AgentCount: {AgentCount}; DurationMilliseconds: {DurationMilliseconds}",
+                result.ResponseType,
+                result.AgentNames.Count,
+                stopwatch.ElapsedMilliseconds);
+            return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            _logger.LogWarning("CFO request cancelled. DurationMilliseconds: {DurationMilliseconds}", stopwatch.ElapsedMilliseconds);
             throw;
         }
         catch (Exception exception)
         {
+            _logger.LogWarning("CFO request failed. FailureType: {FailureType}; DurationMilliseconds: {DurationMilliseconds}", exception.GetType().Name, stopwatch.ElapsedMilliseconds);
             throw new InvalidOperationException("The CFO orchestrator could not complete the request.", exception);
         }
     }

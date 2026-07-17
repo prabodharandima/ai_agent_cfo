@@ -59,14 +59,48 @@ These decisions are final for the initial version.
    - Structured finance transactions remain in SQLite.
 
 6. **MCP is an integration mechanism, not RAG and not a microservice architecture.**
-   - One small Finance MCP server exposes controlled read-only finance tools.
-   - One restricted filesystem MCP connection may expose files under `data/knowledge` only.
+   - One process-backed Finance MCP server exposes controlled read-only finance tools.
+   - One independent process-backed Knowledge File MCP server exposes read-only access to approved files under `data/knowledge` only.
+   - Both MCP servers use the official MCP C# SDK and stdio transport.
+   - Both MCP integrations are disabled by default, initialized lazily on first use, and have controlled local fallback behavior.
+   - ChromaDB remains responsible for semantic RAG retrieval and citations; the Knowledge File MCP server does not replace RAG.
    - The main business application remains the monolith.
 
 7. **Do not overengineer.**
    - Build only the functionality required for the five MVP scenarios.
    - Prefer explicit routing and straightforward services.
    - Do not add autonomous planning, recursive agents, reflection loops, generic workflow engines, or plugin frameworks.
+
+---
+
+## 3.1 Current verified implementation baseline
+
+The following baseline was verified after completion of `TASK-CFO-017`:
+
+- The solution contains four .NET projects:
+  - `src/CfoAgent.Api/CfoAgent.Api.csproj`
+  - `tests/CfoAgent.Api.Tests/CfoAgent.Api.Tests.csproj`
+  - `tools/CfoAgent.FinanceMcpServer/CfoAgent.FinanceMcpServer.csproj`
+  - `tools/CfoAgent.KnowledgeFileMcpServer/CfoAgent.KnowledgeFileMcpServer.csproj`
+- The Finance MCP integration is a real process-backed stdio connection.
+- The Knowledge File MCP integration is a second independent process-backed stdio connection.
+- Finance MCP exposes exactly five approved read-only finance tools.
+- Knowledge File MCP exposes exactly:
+  - `list_knowledge_files`
+  - `read_knowledge_file`
+- The existing in-process finance services and restricted file reader remain controlled fallback paths.
+- Both MCP integrations are configuration-controlled, disabled by default, and started lazily.
+- Caller cancellation is propagated and must never be converted into fallback.
+- ChromaDB remains the semantic retrieval store for RAG and source citations.
+- `99` backend/solution tests were passing at this checkpoint.
+- Because of a known parallel MSBuild project-reference race in the local environment, solution-level validation must use serialized commands:
+
+```bash
+dotnet build CfoAgent.sln --no-restore --maxcpucount:1
+dotnet test CfoAgent.sln --no-build --maxcpucount:1
+```
+
+The test count is a checkpoint, not a permanent fixed requirement. Later tasks may add more tests. Existing passing tests must remain green.
 
 ---
 
@@ -164,10 +198,11 @@ flowchart LR
 
         SALES -. optional MCP path .-> MCP_CLIENT[MCP Clients]
         FORECAST -. optional MCP path .-> MCP_CLIENT
+        KNOWLEDGE -. restricted file validation/access .-> MCP_CLIENT
     end
 
     MCP_CLIENT --> FINANCE_MCP[Finance MCP Server]
-    MCP_CLIENT --> FILE_MCP[Restricted Filesystem MCP Server]
+    MCP_CLIENT --> FILE_MCP[Knowledge File MCP Server]
     FINANCE_MCP --> SQLITE
     FILE_MCP --> KNOWLEDGE_FILES[data/knowledge]
 ```
@@ -227,9 +262,10 @@ flowchart LR
 │   │   │   └── Retrieval/
 │   │   ├── Services/
 │   │   └── Program.cs
-│   └── cfo-agent-ui/                 # React + TypeScript Vite app
+│   └── cfo-agent-ui/                    # React + TypeScript Vite app
 ├── tools/
-│   └── CfoAgent.FinanceMcpServer/    # Small assignment tool provider
+│   ├── CfoAgent.FinanceMcpServer/       # Read-only finance MCP tool provider
+│   └── CfoAgent.KnowledgeFileMcpServer/ # Restricted read-only knowledge-file MCP provider
 └── tests/
     ├── CfoAgent.Api.Tests/
     └── CfoAgent.E2E/
@@ -242,6 +278,8 @@ flowchart LR
 - Do not create folders only to imitate Clean Architecture layers.
 - Keep feature code close to the feature it supports.
 - Shared code should be introduced only after genuine duplication appears.
+- The two MCP server projects are external assignment integration tools and do not convert the application into a microservice architecture.
+- Do not add another backend business project or another MCP server unless the user explicitly changes scope.
 
 ---
 
@@ -266,15 +304,16 @@ flowchart LR
 - Vite.
 - A small typed API client using `fetch` unless an existing dependency justifies another choice.
 - Vitest and React Testing Library.
-- Playwright for the five critical E2E scenarios.
+- Playwright for the critical E2E scenarios.
 - One lightweight chart library only if required by the forecast UI.
 
 ### Local infrastructure
 
 - SQLite database file.
 - ChromaDB in Docker Compose.
-- Finance MCP server as a .NET console process using stdio.
-- Restricted filesystem MCP server for `data/knowledge`.
+- Finance MCP server as a .NET 10 console process using stdio.
+- Knowledge File MCP server as a separate .NET 10 console process using stdio, restricted to `data/knowledge`.
+- Existing in-process services/readers retained only as controlled fallback paths.
 
 ### Dependency rules
 
@@ -581,7 +620,7 @@ Handles:
 
 - Five-year sales forecasts.
 - Forecast method and historical input presentation.
-- Conservative/expected/optimistic scenarios.
+- Conservative, expected, and optimistic scenarios.
 
 Rules:
 
@@ -608,6 +647,8 @@ Rules:
 - Deduplicate source citations.
 - If retrieval is empty or too weak, state that the available knowledge is insufficient.
 - Do not use model memory or invent company facts.
+- The Knowledge File MCP integration may validate or read approved source documents, but the final semantic retrieval must continue through ChromaDB.
+- Do not return raw unrestricted file contents directly as a substitute for RAG.
 
 ### Agent result contract
 
@@ -790,41 +831,61 @@ Rules:
 - Keep business calculations consistent with the monolith’s service behavior.
 - The tool server is an assignment integration adapter, not the new home of the domain model.
 
-### 17.2 Restricted filesystem MCP server
+### 17.2 Knowledge File MCP server
 
-Use a standard filesystem MCP server only if it can be safely configured as read-only and restricted to:
+Create one independent .NET 10 MCP server under:
 
 ```text
-data/knowledge
+tools/CfoAgent.KnowledgeFileMcpServer
 ```
 
-Permitted capabilities:
+Use the official MCP C# SDK and stdio transport.
 
-- List approved knowledge files.
-- Read approved knowledge files.
+Expose exactly these read-only tools:
 
-Forbidden capabilities:
+- `list_knowledge_files`
+- `read_knowledge_file`
 
-- Access outside `data/knowledge`.
-- Path traversal.
-- File creation, modification, or deletion.
-- Arbitrary user-supplied absolute paths.
+The process command is conceptually:
 
-### 17.3 Monolith MCP clients
-
-Create focused client classes:
-
-- `FinanceMcpClient`
-- `KnowledgeFileMcpClient`
+```text
+dotnet run --project tools/CfoAgent.KnowledgeFileMcpServer --no-build -- --root <resolved-data/knowledge>
+```
 
 Rules:
 
-- Discover and validate required tools/resources at startup or first use.
-- Use cancellation and configured timeouts.
-- Integrate Finance MCP into Sales/Forecasting agents behind a configuration flag.
-- Keep deterministic local service fallback enabled for demo resilience.
-- Log when fallback is used.
-- Never convert user input directly into SQL or a filesystem path.
+- Restrict the resolved root to `data/knowledge`.
+- Reject absolute user paths.
+- Reject `..` traversal segments using either path separator style.
+- Resolve every requested path to a full path and verify containment under the approved root.
+- Reject or skip symbolic links and junctions that can escape the approved root.
+- Do not expose write, delete, rename, move, execute, directory-creation, or arbitrary filesystem tools.
+- Return normalized relative paths only.
+- Return controlled errors for invalid or missing files.
+- This server validates and reads approved source files; it does not perform semantic retrieval and does not replace ChromaDB.
+
+### 17.3 Monolith MCP clients and access paths
+
+The monolith contains focused MCP integration classes, including:
+
+- `FinanceMcpClient`
+- `KnowledgeFileMcpProcessClient`
+- `KnowledgeFileMcpAccess`
+- Restricted in-process `KnowledgeFileMcpClient` used only as fallback
+- Focused interfaces only where required for testability and provider boundaries
+
+Rules:
+
+- Discover and validate the exact approved tool capabilities on first use.
+- Reject missing and unexpected Knowledge File MCP tools.
+- Use cancellation tokens and configured finite timeouts.
+- Start MCP processes lazily; service registration or application startup must not launch them.
+- Integrate Finance MCP into Sales and Forecasting agents behind configuration flags.
+- The Financial Knowledge Agent may validate or access approved files through the Knowledge File MCP path, but semantic retrieval and citations must continue through ChromaDB.
+- Keep deterministic local-service and restricted-reader fallback enabled when configured.
+- Log stable fallback reasons without sensitive paths, exception messages, document contents, or stack traces.
+- Never convert caller cancellation into fallback.
+- Never convert user input directly into SQL or an unrestricted filesystem path.
 
 ### MCP failure behavior
 
@@ -834,6 +895,19 @@ When an MCP process is unavailable:
 - Do not crash the host.
 - Do not retry indefinitely.
 - Surface a warning when fallback was used.
+
+When local fallback is enabled:
+
+- A disabled MCP integration must bypass process startup and use the local implementation.
+- Initialization failure may use the local implementation.
+- A missing required capability may use the local implementation.
+- A configured timeout may use the local implementation.
+- Caller-request cancellation must propagate and must not be converted into fallback.
+
+When local fallback is disabled:
+
+- Integration failures must propagate through a controlled application error.
+- The system must not silently produce incomplete or fabricated financial results.
 
 ---
 
@@ -910,7 +984,7 @@ Use ASP.NET Core Problem Details for:
 - Cancellation or timeout.
 - Unexpected server error.
 
-Do not expose stack traces, SQL, raw prompts, or internal entities.
+Do not expose stack traces, SQL, raw prompts, sensitive paths, or internal entities.
 
 ---
 
@@ -997,10 +1071,18 @@ Recommended sections:
     "MaximumTopK": 8
   },
   "Mcp": {
-    "Enabled": true,
     "UseLocalFallback": true,
-    "TimeoutSeconds": 10,
-    "KnowledgeRoot": "./data/knowledge"
+    "Finance": {
+      "Enabled": false,
+      "ServerProjectPath": "tools/CfoAgent.FinanceMcpServer/CfoAgent.FinanceMcpServer.csproj",
+      "TimeoutSeconds": 10
+    },
+    "KnowledgeFiles": {
+      "Enabled": false,
+      "ServerProjectPath": "tools/CfoAgent.KnowledgeFileMcpServer/CfoAgent.KnowledgeFileMcpServer.csproj",
+      "RootPath": "data/knowledge",
+      "TimeoutSeconds": 10
+    }
   },
   "Frontend": {
     "AllowedOrigin": "http://localhost:5173"
@@ -1008,15 +1090,19 @@ Recommended sections:
 }
 ```
 
-Configuration names may be adjusted to the actual code, but responsibilities must remain clear.
+Configuration names may be adjusted to match the actual code, but responsibilities must remain clear.
 
 Rules:
 
 - Only `Mock` is accepted as an AI provider in this MVP.
 - Fail startup for unsupported provider values.
+- Both MCP integrations must remain disabled by default.
+- `UseLocalFallback` controls whether MCP failures may use deterministic local implementations.
+- MCP project paths and knowledge-root paths must be resolved safely from the application content or repository root.
+- Merely registering MCP services must not launch their processes.
 - Do not commit secrets.
 - Environment variables may override local settings.
-- Development paths must be resolved safely from the content/repository root.
+- Development paths must be resolved safely from the content or repository root.
 
 ---
 
@@ -1040,7 +1126,7 @@ Report controlled status for:
 
 - SQLite.
 - ChromaDB.
-- Required MCP processes/connections when enabled.
+- Required MCP processes or connections when enabled, without eagerly launching disabled or unused integrations.
 
 Rules:
 
@@ -1055,7 +1141,7 @@ Rules:
 ### Financial accuracy guardrails
 
 - Never invent financial values.
-- Prefer tool/service data over natural-language model output.
+- Prefer tool or service data over natural-language model output.
 - If data is unavailable, say so.
 - Forecasts must include assumptions and limitations.
 - RAG answers must include sources.
@@ -1069,17 +1155,21 @@ Rules:
 - Do not pass arbitrary user strings as filesystem paths.
 - Restrict filesystem access to the configured knowledge root.
 - Reject path traversal attempts.
+- Reject absolute user-provided paths.
+- Reject or skip symbolic links and junctions that can escape the configured knowledge root.
+- Do not expose write or execute capabilities through MCP.
 
 ### Logging
 
 Log structured metadata for:
 
-- Request/correlation ID.
+- Request or correlation ID.
 - Conversation ID where safe.
 - Classified intent.
 - Participating agents.
 - Service, RAG, and MCP call names.
-- Fallback usage.
+- Whether MCP or local fallback was used.
+- Stable fallback reason.
 - Duration and outcome.
 
 Do not log:
@@ -1089,6 +1179,9 @@ Do not log:
 - Secrets or credentials.
 - Full prompts if they may contain sensitive data.
 - Complete retrieved RAG context.
+- Sensitive absolute file paths.
+- MCP process arguments containing sensitive values.
+- Exception messages or stack traces in normal fallback logs.
 
 ### Resilience
 
@@ -1097,6 +1190,9 @@ Do not log:
 - Do not retry indefinitely.
 - Do not add a heavy resilience framework unless the current task explicitly needs it.
 - Return controlled Problem Details for failures.
+- Caller cancellation must always propagate.
+- A timeout may trigger fallback only when configured.
+- Application startup must not fail merely because a disabled or lazy MCP process is unavailable.
 
 ---
 
@@ -1130,6 +1226,8 @@ Do not log:
 - Do not add generic result builders unless repetition proves necessary.
 - Manual mapping is acceptable for small DTOs.
 - Comments should explain non-obvious decisions, not restate the code.
+- Do not replace the current focused MCP classes with a generic provider framework.
+- Do not create another fallback abstraction hierarchy.
 
 ### EF Core rules
 
@@ -1170,7 +1268,8 @@ Cover:
 - Mock LLM deterministic classification and formatting.
 - Agent routing and result composition.
 - Chunking, stable IDs, and deterministic embeddings.
-- MCP validation and fallback logic.
+- MCP capability discovery, process connection, path containment, cancellation, timeout, and fallback logic.
+- Agent-to-MCP wiring while preserving deterministic local behavior.
 
 ### 24.2 Backend integration tests
 
@@ -1183,17 +1282,42 @@ Cover:
 - HTTP `/api/chat` contract.
 - Problem Details responses.
 - Chroma operations when Docker is available.
-- MCP tool discovery and invocation.
+- Finance and Knowledge File MCP tool discovery and invocation.
+- Disabled, unavailable, timeout, capability-deficient, and caller-cancellation behavior.
 
 Chroma-dependent tests may be conditionally skipped only when Docker is unavailable, with an explicit reason. Required phase gates must run with Docker available.
 
-### 24.3 Frontend tests
+### 24.3 MCP-focused tests
+
+Cover:
+
+- Finance MCP exposes exactly five approved tools.
+- Knowledge File MCP exposes exactly:
+  - `list_knowledge_files`
+  - `read_knowledge_file`
+- Disabled MCP does not start its process.
+- MCP process startup is lazy.
+- Missing or invalid server paths produce controlled outcomes.
+- Missing or unexpected capabilities are rejected.
+- Timeouts follow configured fallback behavior.
+- Caller cancellation propagates without fallback.
+- Absolute paths are rejected.
+- Both `../` and `..\` traversal forms are rejected.
+- Resolved paths remain under `data/knowledge`.
+- Symbolic-link and junction escapes are rejected or skipped.
+- No write, delete, rename, move, create-directory, shell, or execute tools are exposed.
+- Local fallback preserves the same deterministic result contracts.
+- Agents use MCP when enabled and local services when disabled or fallback is triggered.
+- Forecast calculations remain deterministic C# even when historical data comes through MCP.
+- ChromaDB remains responsible for final semantic retrieval and source citations.
+
+### 24.4 Frontend tests
 
 Use Vitest and React Testing Library.
 
 Cover:
 
-- Initial/empty state.
+- Initial or empty state.
 - Prompt submission.
 - Loading state.
 - Error state.
@@ -1201,7 +1325,7 @@ Cover:
 - Source and warning presentation.
 - Mock-mode visibility.
 
-### 24.4 E2E tests
+### 24.5 E2E tests
 
 Use Playwright for exactly the critical MVP paths:
 
@@ -1210,7 +1334,7 @@ Use Playwright for exactly the critical MVP paths:
 3. Top products.
 4. Five-year forecast.
 5. Annual target and assumptions.
-6. Invalid prompt/error presentation.
+6. Invalid prompt or error presentation.
 
 E2E data and clock must be deterministic.
 
@@ -1221,7 +1345,10 @@ E2E data and clock must be deterministic.
 - Do not weaken or delete tests to make a phase pass.
 - Fix implementation defects exposed by tests.
 - Tests must be repeatable and independent.
-- Capture Playwright traces/screenshots on failure only.
+- Capture Playwright traces or screenshots on failure only.
+- The verified `99` tests after `TASK-CFO-017` are a minimum checkpoint, not a hard final count.
+- Later tasks may increase the count, but must not reduce coverage or silently remove tests.
+- Use serialized solution-level validation because of the known local parallel MSBuild race.
 
 ---
 
@@ -1232,7 +1359,7 @@ Do not proceed to the next major phase unless its gate passes.
 - **Phase 1 gate:** deterministic finance data and calculation tests.
 - **Phase 2 gate:** Mock LLM and specialist-agent tests fully offline.
 - **Phase 3 gate:** RAG, source grounding, and orchestrator routing tests.
-- **Phase 4 gate:** MCP discovery, invocation, security, and fallback tests.
+- **Phase 4 gate:** MCP discovery, invocation, security, and fallback tests. **Completed at the `TASK-CFO-017` checkpoint with two independent process-backed MCP connections and 99 passing tests.**
 - **Phase 5 gate:** API, frontend, integration, and E2E scenarios.
 - **Phase 6 gate:** clean setup, complete regression, documentation, and demo readiness.
 
@@ -1253,10 +1380,13 @@ A task is complete only when:
 7. Configuration and documentation were updated when behavior changed.
 8. No secret or real LLM credential was added.
 9. No out-of-scope architecture or package was introduced.
-10. Codex reports:
+10. Completed MCP functionality was not recreated, replaced, or duplicated without an explicit requirement.
+11. ChromaDB RAG was not replaced with raw file reading.
+12. Codex reports:
     - Files changed.
     - Important design choices.
     - Validation commands and results.
+    - Exact test counts.
     - Remaining limitations.
     - Whether the current phase gate is satisfied.
 
@@ -1270,6 +1400,7 @@ For every task:
    - `AGENT.md`
    - `IMPLEMENTATION-PLAN.md`
    - `CODEX-GLOBAL-INSTRUCTIONS.md`
+   - `EXECUTION-ORDER.md`
    - The current task file.
 
 2. Inspect the existing repository before editing.
@@ -1280,15 +1411,31 @@ For every task:
 
 5. Do not start a later task early.
 
-6. Preserve the single ASP.NET Core monolith.
+6. Preserve the single ASP.NET Core business monolith.
 
-7. Prefer the smallest maintainable change.
+7. Preserve the two existing MCP server integrations.
 
-8. Verify current package APIs against official documentation when package APIs may have changed.
+8. Prefer the smallest maintainable change.
 
-9. Run every validation command stated by the task.
+9. Verify current package APIs against official documentation when package APIs may have changed.
 
-10. Stop after reporting the required completion summary.
+10. Run every validation command stated by the task.
+
+11. For all remaining solution-level validation, use:
+
+```bash
+dotnet restore CfoAgent.sln
+dotnet build CfoAgent.sln --no-restore --maxcpucount:1
+dotnet test CfoAgent.sln --no-build --maxcpucount:1
+```
+
+12. Do not interpret the serialized build requirement as a reason to redesign the solution.
+
+13. Do not recreate Finance MCP, Knowledge File MCP, fallback policies, or agent MCP wiring in later tasks.
+
+14. Do not replace ChromaDB retrieval with direct filesystem responses.
+
+15. Stop after reporting the required completion summary.
 
 ### Instruction precedence
 
@@ -1314,17 +1461,17 @@ Expected high-level commands after the corresponding tasks exist:
 docker compose up -d
 
 # Restore and build backend
-dotnet restore
-dotnet build CfoAgent.sln
+dotnet restore CfoAgent.sln
+dotnet build CfoAgent.sln --no-restore --maxcpucount:1
 
-# Initialize/seed deterministic finance data
+# Initialize or seed deterministic finance data
 dotnet run --project src/CfoAgent.Api -- --seed
 
 # Ingest knowledge documents into ChromaDB
 dotnet run --project src/CfoAgent.Api -- --ingest-rag
 
-# Run backend tests
-dotnet test CfoAgent.sln
+# Run backend and solution tests
+dotnet test CfoAgent.sln --no-build --maxcpucount:1
 
 # Run API
 dotnet run --project src/CfoAgent.Api
@@ -1335,6 +1482,20 @@ npm install
 npm run dev
 ```
 
+The MCP processes are launched lazily by the monolith when their corresponding configuration flags are enabled and an operation first requires them.
+
+The expected project commands are conceptually:
+
+```bash
+dotnet run --project tools/CfoAgent.FinanceMcpServer --no-build
+```
+
+```bash
+dotnet run --project tools/CfoAgent.KnowledgeFileMcpServer --no-build -- --root <resolved-data/knowledge>
+```
+
+Do not manually start the MCP servers unless a specific diagnostic or test task requires it.
+
 Final scripts may combine these steps, but they must remain transparent and reproducible.
 
 ---
@@ -1343,15 +1504,16 @@ Final scripts may combine these steps, but they must remain transparent and repr
 
 The implementation remains Mock-only and local. Documentation may describe this future path:
 
-| MVP component | Possible production replacement |
-|---|---|
-| Mock `IChatClient` | Ollama for local testing; OpenAI, Azure OpenAI, or Claude adapter for production |
-| Deterministic token-hash embeddings | A production embedding model |
-| ChromaDB | Azure AI Search, PostgreSQL with pgvector, Qdrant, or another evaluated managed vector store |
-| SQLite | Azure SQL or PostgreSQL |
-| Local knowledge files | Azure Blob Storage or an approved document platform |
-| Local logs | OpenTelemetry and Application Insights |
-| In-memory conversation state | A controlled distributed or persistent session store if genuinely required |
+| MVP component                       | Possible production replacement                                                              |
+| ----------------------------------- | -------------------------------------------------------------------------------------------- |
+| Mock `IChatClient`                  | Ollama for local testing; OpenAI, Azure OpenAI, or Claude adapter for production             |
+| Deterministic token-hash embeddings | A production embedding model                                                                 |
+| ChromaDB                            | Azure AI Search, PostgreSQL with pgvector, Qdrant, or another evaluated managed vector store |
+| SQLite                              | Azure SQL or PostgreSQL                                                                      |
+| Local knowledge files               | Azure Blob Storage or an approved document platform                                          |
+| Local MCP process execution         | Secured hosted MCP integrations or approved internal tool gateways                           |
+| Local logs                          | OpenTelemetry and Application Insights                                                       |
+| In-memory conversation state        | A controlled distributed or persistent session store if genuinely required                   |
 
 Do not implement these production replacements in this MVP.
 
@@ -1362,9 +1524,10 @@ Do not implement these production replacements in this MVP.
 ### Why a monolith?
 
 - Faster implementation within two days.
-- One main deployment and simpler debugging.
+- One main business deployment and simpler debugging.
 - No distributed-system failure modes between agents.
 - Suitable for the small team and assignment scope.
+- The MCP servers are narrow external tool providers, not separate business domains.
 
 ### Why multiple agents inside the monolith?
 
@@ -1376,7 +1539,7 @@ Do not implement these production replacements in this MVP.
 
 - No API key or subscription required.
 - Fully deterministic tests.
-- Allows complete UI/API/agent/RAG/MCP plumbing validation.
+- Allows complete UI, API, agent, RAG, and MCP plumbing validation.
 - Preserves future provider replacement through `IChatClient`.
 
 ### Why deterministic C# finance tools?
@@ -1392,9 +1555,17 @@ Do not implement these production replacements in this MVP.
 
 ### Why two MCP connections only?
 
-- Demonstrates tool and resource integration without adding unnecessary services.
-- Finance MCP provides structured data tools.
-- Filesystem MCP demonstrates restricted knowledge-resource access.
+- Demonstrates multiple independent MCP integrations without adding unnecessary services.
+- Finance MCP provides structured finance-data tools.
+- Knowledge File MCP demonstrates restricted knowledge-resource access.
+- Both remain narrow adapters and do not turn the application into microservices.
+
+### Why keep local fallbacks?
+
+- The interview demo remains resilient when a local MCP process cannot start.
+- Deterministic local services preserve financial correctness.
+- Fallback behavior is explicit, configuration-controlled, logged, and tested.
+- Caller cancellation is never hidden by fallback.
 
 ---
 
@@ -1410,29 +1581,68 @@ The final demo should take approximately 10–15 minutes and show:
 6. Top-five products.
 7. Five-year forecast with assumptions.
 8. RAG answer with source citations.
-9. MCP tool discovery or one visible tool invocation.
-10. Tests and production evolution discussion.
+9. Finance MCP tool discovery or invocation.
+10. Knowledge File MCP restricted tool discovery or invocation.
+11. Controlled fallback behavior.
+12. Tests and production evolution discussion.
 
 Explain clearly:
 
 - MCP is not RAG.
 - Agents are not microservices.
-- The Finance MCP server is an external tool provider required by the assignment.
+- The main business application remains one ASP.NET Core monolith.
+- The Finance MCP server is an external read-only tool provider required by the assignment.
+- The Knowledge File MCP server is a second independent, restricted read-only tool provider.
+- The Knowledge File MCP server does not replace ChromaDB.
 - The LLM does not calculate finance values.
 - ChromaDB stores document embeddings, while SQLite stores structured transactions.
+- MCP processes are disabled by default and launched lazily.
+- Local deterministic implementations remain controlled fallbacks.
 - The Mock LLM can later be replaced by another `IChatClient` implementation.
 
 ---
 
-## 32. Final engineering principle
+## 32. Current checkpoint and remaining work
+
+At the completion of `TASK-CFO-017`:
+
+- Finance MCP integration is complete.
+- Knowledge File MCP integration is complete.
+- Both process-backed connections use the official MCP C# SDK.
+- Both MCP integrations are disabled by default and lazy.
+- MCP capability discovery, timeouts, cancellation, security, and fallback paths are implemented.
+- Sales, Forecasting, and Financial Knowledge agents are wired to their approved MCP paths.
+- ChromaDB remains responsible for semantic RAG retrieval and source citations.
+- All `TASK-CFO-017` acceptance criteria are satisfied.
+- The serialized solution build passes with zero warnings and zero errors.
+- `99` tests pass at this checkpoint.
+- No blocker remains before `TASK-CFO-018`.
+
+For `TASK-CFO-018` and later tasks:
+
+- Do not recreate any MCP integration.
+- Do not create a third MCP server.
+- Do not replace the current MCP fallback implementation.
+- Do not replace ChromaDB with file reading.
+- Preserve all existing MCP and agent tests.
+- Use the serialized solution-level build and test commands.
+- Continue with the current result contracts and configuration structure.
+- Implement only the scope of the current task.
+
+---
+
+## 33. Final engineering principle
 
 Build the smallest solution that clearly demonstrates:
 
 - A working .NET multi-agent application.
 - Correct separation of structured finance calculations and RAG knowledge.
 - Safe, deterministic Mock LLM behavior.
-- Controlled MCP integrations.
+- Two controlled, process-backed MCP integrations.
+- Secure read-only finance and knowledge access.
+- Explicit, tested local fallback behavior.
 - A usable React TypeScript interface.
-- Strong tests and clear technical-lead trade-offs.
+- Strong tests and clear Technical Lead trade-offs.
 
 Do not optimize for theoretical future scale. Optimize for a correct, understandable, interview-ready MVP that can be completed within two days.
+

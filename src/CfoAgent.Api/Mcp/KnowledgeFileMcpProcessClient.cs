@@ -106,7 +106,7 @@ public sealed class KnowledgeFileMcpProcessClient(
             var transport = new StdioClientTransport(new StdioClientTransportOptions
             {
                 Command = "dotnet",
-                Arguments = ["run", "--project", projectPath, "--no-build", "--", "--root", root]
+                Arguments = ["run", "--project", projectPath, "--no-build", "--configuration", GetBuildConfiguration(), "--", "--root", root]
             });
             using var timeout = CreateTimeout(cancellationToken);
             client = await McpClient.CreateAsync(transport, cancellationToken: timeout.Token);
@@ -151,6 +151,15 @@ public sealed class KnowledgeFileMcpProcessClient(
         {
             throw new ArgumentException("Knowledge file path traversal is not permitted.", nameof(relativePath));
         }
+    }
+
+    private static string GetBuildConfiguration()
+    {
+#if DEBUG
+        return "Debug";
+#else
+        return "Release";
+#endif
     }
 
     public async ValueTask DisposeAsync()

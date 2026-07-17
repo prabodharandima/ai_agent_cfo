@@ -6,17 +6,21 @@ using CfoAgent.Api.Data;
 using CfoAgent.Api.Data.Seed;
 using CfoAgent.Api.Features.Forecasting;
 using CfoAgent.Api.Features.Sales;
+using CfoAgent.Api.Features.Chat;
 using CfoAgent.Api.Health;
 using CfoAgent.Api.Mcp;
+using CfoAgent.Api.Observability;
 using CfoAgent.Api.Rag.Chroma;
 using CfoAgent.Api.Rag.Embeddings;
 using CfoAgent.Api.Rag.Ingestion;
 using CfoAgent.Api.Rag.Retrieval;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
+using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 var seedRequested = args.Contains("--seed", StringComparer.OrdinalIgnoreCase);
@@ -94,11 +98,9 @@ builder.Services.AddSingleton<CfoAgentFramework>();
 builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>, DeterministicTokenHashEmbeddingGenerator>();
 builder.Services.AddScoped<RagDocumentIngestionService>();
 builder.Services.AddScoped<FinancialKnowledgeRetrievalService>();
-builder.Services.AddSingleton<FinanceMcpClient>();
-builder.Services.AddSingleton<IFinanceMcpClient>(services => services.GetRequiredService<FinanceMcpClient>());
+builder.Services.AddSingleton<IFinanceMcpClient, FinanceMcpClient>();
 builder.Services.AddSingleton<KnowledgeFileMcpClient>();
-builder.Services.AddSingleton<KnowledgeFileMcpProcessClient>();
-builder.Services.AddSingleton<IKnowledgeFileMcpProcessClient>(services => services.GetRequiredService<KnowledgeFileMcpProcessClient>());
+builder.Services.AddSingleton<IKnowledgeFileMcpProcessClient, KnowledgeFileMcpProcessClient>();
 builder.Services.AddSingleton<IKnowledgeFileMcpClient, KnowledgeFileMcpAccess>();
 builder.Services.AddSingleton<FinanceMcpFallback>();
 builder.Services.AddSingleton<KnowledgeFileMcpFallback>();
@@ -113,7 +115,18 @@ builder.Services.AddCors(options =>
     });
 });
 
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 builder.Services.AddOpenApi();
+builder.Services.AddRateLimiter(options =>
+{
+    options.AddFixedWindowLimiter("chat", limiter =>
+    {
+        limiter.PermitLimit = 30;
+        limiter.Window = TimeSpan.FromMinutes(1);
+        limiter.QueueLimit = 0;
+    });
+});
 
 builder.Services.AddHttpClient<ChromaHealthCheck>((serviceProvider, client) =>
 {
@@ -130,9 +143,14 @@ builder.Services.AddHttpClient<ChromaClient>((serviceProvider, client) =>
 });
 
 builder.Services.AddHealthChecks()
-    .AddCheck<ChromaHealthCheck>("chroma", tags: ["ready"]);
+    .AddCheck<SqliteHealthCheck>("sqlite", tags: ["ready"])
+    .AddCheck<ChromaHealthCheck>("chroma", tags: ["ready"])
+    .AddCheck<McpConfigurationHealthCheck>("mcp", tags: ["ready"]);
 
 var app = builder.Build();
+
+app.UseMiddleware<RequestCorrelationMiddleware>();
+app.UseExceptionHandler();
 
 if (app.Environment.IsDevelopment())
 {
@@ -180,6 +198,7 @@ if (ragIngestionRequested)
 }
 
 app.UseCors("LocalFrontend");
+app.UseRateLimiter();
 
 if (app.Environment.IsDevelopment())
 {
@@ -211,6 +230,8 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
     ResponseWriter = WriteHealthResponse
 });
 
+app.MapChatEndpoints();
+
 app.Run();
 
 static Task WriteHealthResponse(HttpContext context, HealthReport report)
@@ -230,3 +251,5 @@ static Task WriteHealthResponse(HttpContext context, HealthReport report)
         dependencies
     });
 }
+
+public partial class Program;

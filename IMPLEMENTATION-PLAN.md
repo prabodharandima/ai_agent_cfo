@@ -26,7 +26,8 @@
 │   │   └── Program.cs
 │   └── cfo-agent-ui/               # React + TypeScript
 ├── tools/
-│   └── CfoAgent.FinanceMcpServer/  # Small external tool provider, not a business microservice
+│   ├── CfoAgent.FinanceMcpServer/       # Read-only finance MCP provider
+│   └── CfoAgent.KnowledgeFileMcpServer/ # Restricted read-only knowledge-file MCP provider
 └── tests/
     ├── CfoAgent.Api.Tests/
     └── CfoAgent.E2E/
@@ -56,11 +57,71 @@ Create deterministic embeddings, ChromaDB ingestion/retrieval, the Knowledge Age
 
 **Exit gate:** the orchestrator can answer all five MVP prompts using the correct agents and sources.
 
-## Phase 4 — MCP integrations
+## Phase 4 — MCP integrations — Completed
 
-Create one small Finance MCP server and connect a read-only filesystem MCP server. Integrate MCP client calls into the monolith with safe fallback to local services.
+Implemented two independent process-backed stdio MCP connections using the official MCP C# SDK:
 
-**Exit gate:** MCP tools can be listed and invoked; failures return controlled errors or fall back as specified.
+1. **Finance MCP server**
+   - Exposes exactly:
+     - `get_sales_summary`
+     - `compare_sales_periods`
+     - `get_top_products`
+     - `get_historical_sales`
+     - `get_budget_target`
+   - Used by the Sales and Forecasting agents when enabled.
+   - Preserves deterministic C# calculations and local-service fallback.
+
+2. **Knowledge File MCP server**
+   - Exposes exactly:
+     - `list_knowledge_files`
+     - `read_knowledge_file`
+   - Restricted to `data/knowledge`.
+   - Rejects absolute paths, traversal, links/junction escapes, and all write/execute operations.
+   - Uses the existing restricted in-process reader as fallback.
+   - Does not replace ChromaDB; semantic RAG retrieval and citations remain ChromaDB responsibilities.
+
+Both integrations:
+
+- Are disabled by default.
+- Start lazily on first use.
+- Use finite timeouts and cancellation tokens.
+- Propagate caller cancellation without fallback.
+- Use controlled fallback when disabled, unavailable, timed out, or capability-deficient.
+- Log stable fallback reasons without sensitive values.
+
+**Verified exit gate after `TASK-CFO-017`:**
+
+- Focused filesystem MCP tests: 10 passed.
+- All MCP tests: 31 passed.
+- All backend/solution tests: 99 passed.
+- Serialized full solution build: passed with 0 warnings and 0 errors.
+- All original `TASK-CFO-017` acceptance criteria were satisfied.
+
+## Current verified baseline before TASK-CFO-018
+
+- Four .NET projects are present in `CfoAgent.sln`:
+  - `CfoAgent.Api`
+  - `CfoAgent.Api.Tests`
+  - `CfoAgent.FinanceMcpServer`
+  - `CfoAgent.KnowledgeFileMcpServer`
+- Phase 4 is complete.
+- Current checkpoint: 99 tests passing.
+- ChromaDB remains the RAG vector store.
+- MCP integrations are configuration-controlled, disabled by default, and lazy.
+- The application remains one ASP.NET Core business monolith; MCP servers are assignment tool providers, not business microservices.
+- Remaining work starts with `TASK-CFO-018` and must not recreate or replace completed MCP functionality.
+
+### Required solution validation commands
+
+A known local parallel MSBuild project-reference race can cause a non-diagnostic failure with the default multi-node solution build. Use serialized validation for all remaining tasks:
+
+```bash
+dotnet restore CfoAgent.sln
+dotnet build CfoAgent.sln --no-restore --maxcpucount:1
+dotnet test CfoAgent.sln --no-build --maxcpucount:1
+```
+
+Individual project builds may still use their normal commands. Do not treat the serialized build requirement as an application architecture change.
 
 ## Phase 5 — Chat API and React UI
 
@@ -84,7 +145,7 @@ Add validation, exception handling, logs, final regression tests, setup document
 
 ### Day 2
 
-- Morning: Phase 4
+- Morning: Phase 4 (completed)
 - Early afternoon: Phase 5
 - Late afternoon: Phase 6 and demo rehearsal
 
@@ -114,3 +175,16 @@ The README may explain future replacements:
 - ChromaDB → Azure AI Search or PostgreSQL/pgvector
 - SQLite → Azure SQL or PostgreSQL
 - Local files → Blob Storage or controlled document platform
+
+## Remaining-task alignment rules
+
+For `TASK-CFO-018` and later tasks:
+
+- Do not recreate either MCP server or MCP client integration.
+- Do not replace ChromaDB RAG with raw file reading.
+- Preserve the existing MCP fallback, cancellation, timeout, and lazy-start behavior.
+- Use the current result contracts rather than creating a second parallel contract.
+- Run serialized solution build/test commands shown above.
+- Treat 99 passing tests as the minimum checkpoint; later tasks may increase the count.
+- Update documentation when externally visible behavior changes.
+

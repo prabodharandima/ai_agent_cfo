@@ -74,21 +74,32 @@ public sealed class FinanceMcpTools(FinanceDbContext dbContext)
             return FinanceMcpResult<McpTopProducts>.Failure($"limit must be between 1 and {MaximumTopProducts}.");
         }
 
-        var products = await dbContext.Sales.AsNoTracking()
+        var sales = await dbContext.Sales.AsNoTracking()
             .Where(sale => sale.SaleDate >= start && sale.SaleDate <= end)
-            .GroupBy(sale => new { sale.Product.Code, sale.Product.Name })
+            .Select(sale => new SaleLine(
+                sale.OrderNumber,
+                sale.Product.Code,
+                sale.Product.Name,
+                sale.SaleDate,
+                sale.Quantity,
+                sale.UnitPrice,
+                sale.DiscountAmount,
+                sale.UnitCost))
+            .ToListAsync(cancellationToken);
+        var products = sales
+            .GroupBy(sale => new { sale.ProductCode, sale.ProductName })
             .Select(group => new McpTopProduct(
-                group.Key.Code,
-                group.Key.Name,
+                group.Key.ProductCode,
+                group.Key.ProductName,
                 group.Sum(sale => sale.Quantity),
                 group.Sum(sale => sale.Quantity * sale.UnitPrice - sale.DiscountAmount),
                 group.Sum(sale => sale.Quantity * sale.UnitPrice - sale.DiscountAmount - sale.Quantity * sale.UnitCost)))
             .OrderByDescending(product => product.NetRevenue)
-            .ThenBy(product => product.ProductCode)
+            .ThenBy(product => product.ProductCode, StringComparer.Ordinal)
             .Take(limit)
-            .ToListAsync(cancellationToken);
+            .ToArray();
 
-        var warnings = products.Count == 0 ? new[] { "No sales data is available for this period." } : Array.Empty<string>();
+        var warnings = products.Length == 0 ? new[] { "No sales data is available for this period." } : Array.Empty<string>();
         return FinanceMcpResult<McpTopProducts>.Success(new(new(start.ToString("yyyy-MM-dd"), end.ToString("yyyy-MM-dd")), products, warnings));
     }
 
@@ -101,13 +112,24 @@ public sealed class FinanceMcpTools(FinanceDbContext dbContext)
             return FinanceMcpResult<McpHistoricalSales>.Failure("Provide an inclusive year range from 2000 through 2100 containing at most five years.");
         }
 
-        var totals = await dbContext.Sales.AsNoTracking()
+        var sales = await dbContext.Sales.AsNoTracking()
             .Where(sale => sale.SaleDate.Year >= startYear && sale.SaleDate.Year <= endYear)
+            .Select(sale => new SaleLine(
+                sale.OrderNumber,
+                sale.Product.Code,
+                sale.Product.Name,
+                sale.SaleDate,
+                sale.Quantity,
+                sale.UnitPrice,
+                sale.DiscountAmount,
+                sale.UnitCost))
+            .ToListAsync(cancellationToken);
+        var totals = sales
             .GroupBy(sale => sale.SaleDate.Year)
             .Select(group => new McpYearlySalesTotal(group.Key, group.Sum(sale => sale.Quantity * sale.UnitPrice - sale.DiscountAmount)))
             .OrderBy(total => total.Year)
-            .ToListAsync(cancellationToken);
-        var warnings = totals.Count == 0 ? new[] { "No historical sales data is available for the requested years." } : Array.Empty<string>();
+            .ToArray();
+        var warnings = totals.Length == 0 ? new[] { "No historical sales data is available for the requested years." } : Array.Empty<string>();
         return FinanceMcpResult<McpHistoricalSales>.Success(new(totals, warnings));
     }
 
@@ -134,7 +156,7 @@ public sealed class FinanceMcpTools(FinanceDbContext dbContext)
     {
         var sales = await dbContext.Sales.AsNoTracking()
             .Where(sale => sale.SaleDate >= start && sale.SaleDate <= end)
-            .Select(sale => new SaleLine(sale.OrderNumber, sale.Product.Code, sale.Product.Name, sale.Quantity, sale.UnitPrice, sale.DiscountAmount, sale.UnitCost))
+            .Select(sale => new SaleLine(sale.OrderNumber, sale.Product.Code, sale.Product.Name, sale.SaleDate, sale.Quantity, sale.UnitPrice, sale.DiscountAmount, sale.UnitCost))
             .ToListAsync(cancellationToken);
         var revenue = sales.Sum(sale => sale.Quantity * sale.UnitPrice - sale.DiscountAmount);
         var cost = sales.Sum(sale => sale.Quantity * sale.UnitCost);
@@ -168,5 +190,5 @@ public sealed class FinanceMcpTools(FinanceDbContext dbContext)
         return true;
     }
 
-    private sealed record SaleLine(string OrderNumber, string ProductCode, string ProductName, decimal Quantity, decimal UnitPrice, decimal DiscountAmount, decimal UnitCost);
+    private sealed record SaleLine(string OrderNumber, string ProductCode, string ProductName, DateOnly SaleDate, decimal Quantity, decimal UnitPrice, decimal DiscountAmount, decimal UnitCost);
 }

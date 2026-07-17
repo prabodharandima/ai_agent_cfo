@@ -93,11 +93,11 @@ public sealed class FinanceMcpClient(
 
     public async Task<BudgetTargetResult> GetBudgetTargetAsync(int year, int? month, CancellationToken cancellationToken)
     {
-        var arguments = new Dictionary<string, object?> { ["year"] = year };
-        if (month is not null)
+        var arguments = new Dictionary<string, object?>
         {
-            arguments["month"] = month.Value;
-        }
+            ["year"] = year,
+            ["month"] = month
+        };
 
         var result = await CallToolAsync<McpBudgetTarget>("get_budget_target", arguments, cancellationToken);
         return new BudgetTargetResult(
@@ -198,7 +198,7 @@ public sealed class FinanceMcpClient(
             var transport = new StdioClientTransport(new StdioClientTransportOptions
             {
                 Command = "dotnet",
-                Arguments = ["run", "--project", projectPath, "--no-build"]
+                Arguments = ["run", "--project", projectPath, "--no-build", "--configuration", GetBuildConfiguration()]
             });
             using var timeout = CreateTimeout(cancellationToken);
             client = await McpClient.CreateAsync(transport, cancellationToken: timeout.Token);
@@ -223,6 +223,15 @@ public sealed class FinanceMcpClient(
     private static DateOnly StartOfWeek(DateOnly date) => date.AddDays(-((int)date.DayOfWeek + 6) % 7);
 
     private static string FormatDate(DateOnly date) => date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+
+    private static string GetBuildConfiguration()
+    {
+#if DEBUG
+        return "Debug";
+#else
+        return "Release";
+#endif
+    }
 
     private static SalesSummary ToSalesSummary(McpSalesSummary summary) => new(
         ToSalesPeriod(summary.Period),

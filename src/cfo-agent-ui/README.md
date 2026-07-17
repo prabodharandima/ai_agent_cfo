@@ -1,32 +1,20 @@
-# React + TypeScript + Vite
+# CFO AI Agent UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The React and TypeScript chat interface for the CFO AI Agent MVP. It calls the monolith's `POST /api/chat` endpoint and renders the five supported deterministic CFO response types, including KPIs, product tables, forecasts, assumptions, warnings, and cited sources.
 
-Currently, two official plugins are available:
+Run it from this directory after starting the API and ChromaDB as described in the root [README](../../README.md):
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```powershell
+npm ci
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Validation commands:
+
+```powershell
+npm run build
+npm test -- --run
+npm run test:e2e
+```
+
+The UI intentionally contains no model provider, authentication, streaming, or persistence logic. See the root documentation for the full architecture, demo prompts, and final validation record.
