@@ -20,6 +20,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
+using OllamaSharp;
 using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -60,8 +61,15 @@ builder.Services.AddOptions<RagOptions>()
 
 builder.Services.AddOptions<AiOptions>()
     .BindConfiguration(AiOptions.SectionName)
-    .Validate(options => string.Equals(options.Provider, "Mock", StringComparison.Ordinal), "AI:Provider must be Mock for this MVP.")
+    .Validate(options => string.Equals(options.Provider, "Mock", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(options.Provider, "Ollama", StringComparison.OrdinalIgnoreCase), "AI:Provider must be Mock or Ollama.")
     .Validate(options => !string.IsNullOrWhiteSpace(options.Model), "AI:Model is required.")
+    .Validate(options => Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var uri)
+        && (string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)), "AI:BaseUrl must be an absolute HTTP or HTTPS URI.")
+    .Validate(options => options.TimeoutSeconds is > 0 and <= 600, "AI:TimeoutSeconds must be between 1 and 600.")
+    .Validate(options => double.IsFinite(options.Temperature) && options.Temperature is >= 0 and <= 2, "AI:Temperature must be finite and between 0 and 2.")
+    .Validate(options => options.ContextLength is >= 1_024 and <= 32_768, "AI:ContextLength must be between 1024 and 32768.")
     .Validate(options => options.SimulatedDelayMilliseconds >= 0, "AI:SimulatedDelayMilliseconds must not be negative.")
     .ValidateOnStart();
 
@@ -93,7 +101,32 @@ builder.Services.AddScoped<SalesAnalysisAgent>();
 builder.Services.AddScoped<ForecastingAgent>();
 builder.Services.AddScoped<FinancialKnowledgeAgent>();
 builder.Services.AddScoped<CfoOrchestratorAgent>();
-builder.Services.AddSingleton<IChatClient, MockChatClient>();
+builder.Services.AddHttpClient(AiOptions.OllamaHttpClientName, (serviceProvider, client) =>
+{
+    var ai = serviceProvider.GetRequiredService<IOptions<AiOptions>>().Value;
+    client.BaseAddress = new Uri(ai.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(ai.TimeoutSeconds);
+});
+builder.Services.AddSingleton<IChatClient>(serviceProvider =>
+{
+    var ai = serviceProvider.GetRequiredService<IOptions<AiOptions>>().Value;
+
+    if (string.Equals(ai.Provider, "Mock", StringComparison.OrdinalIgnoreCase))
+    {
+        return ActivatorUtilities.CreateInstance<MockChatClient>(serviceProvider);
+    }
+
+    if (string.Equals(ai.Provider, "Ollama", StringComparison.OrdinalIgnoreCase))
+    {
+        var httpClient = serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(AiOptions.OllamaHttpClientName);
+        return new OllamaApiClient(httpClient)
+        {
+            SelectedModel = ai.Model
+        };
+    }
+
+    throw new InvalidOperationException("AI provider configuration was not validated.");
+});
 builder.Services.AddSingleton<CfoAgentFramework>();
 builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>, DeterministicTokenHashEmbeddingGenerator>();
 builder.Services.AddScoped<RagDocumentIngestionService>();
