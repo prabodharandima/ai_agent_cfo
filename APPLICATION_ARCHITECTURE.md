@@ -2,7 +2,7 @@
 
 ## 1. Document purpose
 
-This document describes the architecture implemented in the CFO AI Agent repository at the completed Phase 6 checkpoint. It is intended for technical reviewers, engineers maintaining the MVP, and interviewers who need to distinguish current behavior from optional configuration and future plans.
+This document describes the architecture implemented in the CFO AI Agent repository at the completed Phase 7 checkpoint. It is intended for technical reviewers, engineers maintaining the MVP, and interviewers who need to distinguish current behavior from optional configuration and future plans.
 
 The source of truth is the current repository implementation, especially `src/CfoAgent.Api`, `src/cfo-agent-ui`, `tools`, `tests`, `data/knowledge`, `docker-compose.yml`, and `src/CfoAgent.Api/appsettings.json`. The latest recorded full regression in `docs/FINAL-VALIDATION.md` reports 118 backend tests, 10 frontend unit tests, and 7 Playwright tests passing on 2026-07-16.
 
@@ -11,11 +11,11 @@ The architecture checkpoint represented here has:
 - one React and TypeScript browser application;
 - one ASP.NET Core .NET 10 business monolith;
 - four in-process agents;
-- one deterministic Mock `IChatClient`;
+- one configuration-selected `IChatClient`: deterministic Mock by default or optional local Ollama;
 - SQLite for structured finance data;
 - ChromaDB for Retrieval-Augmented Generation (RAG);
 - two optional, independently process-backed MCP integrations; and
-- no real LLM provider, authentication, persistent chat history, streaming HTTP response, queue, or background-job framework.
+- no cloud LLM provider, authentication, persistent chat history, streaming HTTP response, queue, or background-job framework.
 
 ## 2. Executive architecture summary
 
@@ -28,9 +28,9 @@ The monolith contains four agents:
 3. `ForecastingAgent`
 4. `FinancialKnowledgeAgent`
 
-These agents are ordinary in-process C# classes. They are not microservices and do not communicate over HTTP. Microsoft Agent Framework wraps the single registered `MockChatClient` through `CfoAgentFramework`; sessions are created for individual calls and are not persisted.
+These agents are ordinary in-process C# classes. They are not microservices and do not communicate over HTTP. Microsoft Agent Framework wraps the single selected `IChatClient` through `CfoAgentFramework`; sessions are created for individual calls and are not persisted.
 
-`MockChatClient` is deterministic and offline. It classifies intents by keyword rules and formats already verified payloads. It does not calculate authoritative revenue, profit, rankings, dates, percentages, budgets, or forecasts. Those values come from EF Core queries and deterministic C# in `SalesAnalysisService`, `SalesForecastingService`, or the equivalent read-only Finance MCP tools.
+`MockChatClient` is deterministic and offline, and remains the default provider. `OllamaChatClient` is an optional local `IChatClient` adapter selected through `AI:Provider=Ollama`, with `AI:Model=llama3.2:3b` supplied through configuration. Neither provider calculates authoritative revenue, profit, rankings, dates, percentages, budgets, or forecasts. Those values come from EF Core queries and deterministic C# in `SalesAnalysisService`, `SalesForecastingService`, or the equivalent read-only Finance MCP tools.
 
 SQLite stores `Product`, `Sale`, and `BudgetTarget` records. ChromaDB stores chunk text, 256-dimensional deterministic embeddings, and citation metadata derived from Markdown under `data/knowledge`. MCP is not RAG: the Finance MCP server exposes read-only structured finance tools, while the Knowledge File MCP server exposes restricted file list/read tools. ChromaDB remains the semantic retrieval system.
 
@@ -49,11 +49,11 @@ flowchart LR
     FINMCP --> SQLITE
     FILEMCP --> FILES["data/knowledge Markdown"]
     FILES -->|"ingestion command"| CHROMA
-    MONO -. "TBA" .-> OLLAMA["Ollama integration<br/>TBA — planned, not implemented."]
+    MONO -. "optional local IChatClient" .-> OLLAMA["Ollama local process<br/>configuration-selected"]
     MONO -. "TBA" .-> OPENAI["OpenAI integration<br/>TBA — planned, not implemented."]
 
     classDef future stroke-dasharray: 5 5,color:#666;
-    class OLLAMA,OPENAI future;
+    class OPENAI future;
 ```
 
 ## 4. Container/deployment diagram
@@ -74,6 +74,7 @@ flowchart TB
         DB[("data/cfo-agent.db<br/>SQLite file")]
         FINPROC["CfoAgent.FinanceMcpServer<br/>lazy child process over stdio"]
         FILEPROC["CfoAgent.KnowledgeFileMcpServer<br/>lazy child process over stdio"]
+        OLLAMA["Ollama local process<br/>optional, separately started"]
         KNOWLEDGE["data/knowledge"]
     end
 
@@ -82,7 +83,6 @@ flowchart TB
     end
 
     subgraph FUTURE["Future dependencies"]
-        OLLAMA["Ollama local process<br/>TBA — planned, not implemented."]
         OPENAI["OpenAI external API<br/>TBA — planned, not implemented."]
     end
 
@@ -96,14 +96,14 @@ flowchart TB
     SERVICES -. "starts when enabled and first used" .-> FILEPROC
     FINPROC -->|"read-only SQLite"| DB
     FILEPROC -->|"list/read only"| KNOWLEDGE
-    API -. "TBA — planned, not implemented." .-> OLLAMA
+    API -. "only when AI:Provider=Ollama" .-> OLLAMA
     API -. "TBA — planned, not implemented." .-> OPENAI
 
     classDef future stroke-dasharray: 5 5,color:#666;
-    class OLLAMA,OPENAI future;
+    class OPENAI future;
 ```
 
-The React code runs in the browser and is served by Vite during local development. `CfoAgent.Api` is the main business process. ChromaDB is the only Docker service. When explicitly enabled, the two MCP clients launch local .NET child processes using stdio. Ollama and OpenAI are future dependencies only: `TBA — planned, not implemented.`
+The React code runs in the browser and is served by Vite during local development. `CfoAgent.Api` is the main business process. ChromaDB is the only Docker service. When explicitly enabled, the two MCP clients launch local .NET child processes using stdio. Ollama is an optional separately started local dependency; startup does not contact, start, or download it. OpenAI remains future-only and is not implemented.
 
 ## 5. Backend monolith internal architecture
 
@@ -118,7 +118,9 @@ flowchart LR
         SALES --> FRAMEWORK
         FORECAST --> FRAMEWORK
         KNOW --> FRAMEWORK
-        FRAMEWORK --> MOCK["MockChatClient<br/>IChatClient"]
+        FRAMEWORK --> CHATCLIENT["Selected IChatClient"]
+        CHATCLIENT --> MOCK["MockChatClient<br/>default"]
+        CHATCLIENT -. "AI:Provider=Ollama" .-> OLLAMA["OllamaChatClient<br/>local optional"]
 
         SALES --> FINFALLBACK["FinanceMcpFallback"]
         FINFALLBACK --> FINCLIENT["FinanceMcpClient"]
@@ -938,13 +940,15 @@ With default configuration, both MCP flags are false, so no MCP process starts a
 
 ## 22. Future LLM integration — TBA
 
-No Ollama, OpenAI, Azure OpenAI, Anthropic, or other real provider package, adapter, endpoint, credential, configuration selector, or network call exists in the current application.
+No OpenAI, Azure OpenAI, Anthropic, or other cloud-provider package, adapter, endpoint, credential, configuration selector, or network call exists in the current application. The only optional real local provider is Ollama, selected through the existing `IChatClient` boundary.
 
-### 22.1 Ollama local LLM — TBA
+### 22.1 Ollama local LLM
 
-`TBA — planned, not implemented.`
+`OllamaChatClient` wraps `OllamaSharp.OllamaApiClient` and is selected only when `AI:Provider=Ollama`. `AI:Model` supplies `llama3.2:3b` through configuration; the committed default remains `Mock` with `DeterministicMock`.
 
-An intended future design could add a new `IChatClient` implementation or adapter that points to a local Ollama endpoint and is selected through validated configuration. A separate local embedding adapter could also be evaluated. Before adoption, the project would need deterministic fallback behavior, cancellation/timeout tests, tool-calling compatibility checks with Microsoft Agent Framework and MCP result contracts, structured-output validation, and regression tests proving that financial calculations remain in C#/SQL. Development could retain Mock as an explicit provider option.
+Ollama requests use configured finite timeout, temperature, context, and output limits. Caller cancellation propagates. Startup is network-free, liveness ignores Ollama, and readiness probes the lightweight tags endpoint only when Ollama is selected. Unavailable, timeout, and malformed responses produce controlled sanitized errors; Ollama does not automatically fall back to Mock.
+
+The adapter has no MCP tools. It does not calculate finance data, generate embeddings, query ChromaDB, or change MCP fallback policy. Finance calculations remain deterministic C#/SQL and semantic retrieval remains ChromaDB with the existing deterministic embedding generator.
 
 ### 22.2 OpenAI production LLM — TBA
 
@@ -961,8 +965,8 @@ No production model is guaranteed or hard-coded by this document.
 ```mermaid
 flowchart LR
     CONFIG["Validated AI provider configuration"] --> SELECT{"Provider"}
-    SELECT --> MOCK["MockChatClient<br/>IMPLEMENTED"]
-    SELECT -. "TBA" .-> OLLAMA["Ollama IChatClient adapter<br/>TBA — planned, not implemented."]
+    SELECT --> MOCK["MockChatClient<br/>IMPLEMENTED DEFAULT"]
+    SELECT --> OLLAMA["OllamaChatClient<br/>IMPLEMENTED OPTIONAL LOCAL"]
     SELECT -. "TBA" .-> OPENAI["OpenAI / Azure OpenAI adapter<br/>TBA — planned, not implemented."]
     MOCK --> FRAMEWORK["CfoAgentFramework"]
     OLLAMA -.-> FRAMEWORK
@@ -970,18 +974,18 @@ flowchart LR
 
     classDef implemented stroke:#26734d,stroke-width:2px;
     classDef future stroke-dasharray: 5 5,color:#666;
-    class MOCK implemented;
-    class OLLAMA,OPENAI future;
+    class MOCK,OLLAMA implemented;
+    class OPENAI future;
 ```
 
-Current startup validation explicitly rejects any `AI:Provider` other than `Mock`.
+Current startup validation accepts `AI:Provider=Mock` or `AI:Provider=Ollama` and rejects other values.
 
 ## 23. Architecture decisions and trade-offs
 
 - **Why a monolith:** the two-day MVP benefits from one business process, one DI container, direct in-process calls, simple debugging, and no distributed coordination between agents.
 - **Why four in-process agents:** orchestration, sales, forecasting, and unstructured knowledge have distinct responsibilities while sharing one process and contracts.
 - **Why two external MCP tool servers:** Finance MCP demonstrates controlled structured-data tools; Knowledge File MCP demonstrates a second independently connected, restricted filesystem tool provider. Neither owns business workflow.
-- **Why Mock LLM:** no credentials or public network dependency, stable tests, deterministic classification/wording, and a standard `IChatClient` replacement boundary.
+- **Why Mock by default with optional Ollama:** Mock keeps normal tests deterministic and offline. Ollama exercises the same `IChatClient` boundary for local validation without changing finance authority, RAG, MCP, or the default startup path.
 - **Why deterministic calculations:** authoritative finance values must be auditable and repeatable; language-model output is not an arithmetic source of truth.
 - **Why ChromaDB:** it demonstrates local vector retrieval, chunk metadata, distance filtering, and citations for unstructured planning documents.
 - **Why SQLite:** it is local, file-based, EF Core compatible, and sufficient for deterministic demo transactions and targets.
@@ -993,7 +997,7 @@ Trade-offs include local-only dependencies, duplicated query formulas in the Fin
 
 ## 24. Known limitations
 
-- Mock LLM is the only provider.
+- Mock LLM is the default provider; Ollama is an optional local provider selected through configuration.
 - Intent classification is keyword-based and supports only the documented CFO scope.
 - Deterministic token-hash embeddings are a plumbing baseline, not production semantic embeddings.
 - ChromaDB is local Docker infrastructure using the unpinned `chromadb/chroma:latest` image.
@@ -1010,7 +1014,7 @@ Trade-offs include local-only dependencies, duplicated query formulas in the Fin
 - MCP processes are local child processes and have no authentication.
 - The React UI is one route with component-local state.
 - Solution-level validation requires serialized MSBuild in the documented local environment.
-- Real Ollama/OpenAI providers and production deployment are `TBA — planned, not implemented.`
+- OpenAI and other cloud providers, plus production deployment, are `TBA — planned, not implemented.` Ollama is the implemented optional local provider.
 
 ## 25. Production evolution
 
@@ -1035,7 +1039,7 @@ These are architecture options, not repository claims. `TBA — not currently im
 |---|---|
 | Agent | An in-process C# class with a focused responsibility and a Microsoft Agent Framework wrapper around `IChatClient`. |
 | Orchestrator | `CfoOrchestratorAgent`, which classifies prompts, selects specialists, and composes results. |
-| LLM | Large Language Model. No real LLM is connected in this checkpoint. |
+| LLM | Large Language Model. The default provider is deterministic Mock; an optional local Ollama provider is available through configuration. |
 | Mock LLM | `MockChatClient`, a deterministic offline `IChatClient` that classifies keywords and formats verified context. |
 | RAG | Retrieval-Augmented Generation: retrieve relevant document chunks first, then provide bounded sources to the response formatter. |
 | Embedding | A numeric vector representing token features. The current implementation generates a normalized 256-float token-hash vector. |

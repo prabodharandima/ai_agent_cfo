@@ -18,6 +18,8 @@ public sealed class AiOptions
 
     public int ContextLength { get; init; }
 
+    public int MaxOutputTokens { get; init; }
+
     public int SimulatedDelayMilliseconds { get; init; }
 
     public bool SimulateFailure { get; init; }

@@ -22,7 +22,7 @@ public sealed class SalesAnalysisAgent(
                 token => financeMcpClient!.GetCurrentWeekSummaryAsync(token),
                 salesAnalysisService.GetCurrentWeekSummaryAsync,
                 cancellationToken);
-            var answer = await GetMockAnswerAsync(AgentPromptTemplates.ForSalesSummary(summary), cancellationToken);
+            var answer = await GetAnswerAsync(AgentPromptTemplates.ForSalesSummary(summary), cancellationToken);
 
             return new AgentResult(
                 answer,
@@ -54,7 +54,7 @@ public sealed class SalesAnalysisAgent(
                 token => financeMcpClient!.GetWeekOverWeekComparisonAsync(token),
                 salesAnalysisService.GetWeekOverWeekComparisonAsync,
                 cancellationToken);
-            var answer = await GetMockAnswerAsync(AgentPromptTemplates.ForSalesComparison(comparison), cancellationToken);
+            var answer = await GetAnswerAsync(AgentPromptTemplates.ForSalesComparison(comparison), cancellationToken);
             var warnings = comparison.CurrentWeek.Warnings
                 .Concat(comparison.PreviousWeek.Warnings)
                 .Concat(comparison.Warnings)
@@ -91,7 +91,7 @@ public sealed class SalesAnalysisAgent(
                 token => financeMcpClient!.GetCurrentMonthTopProductsAsync(token),
                 salesAnalysisService.GetCurrentMonthTopProductsAsync,
                 cancellationToken);
-            var answer = await GetMockAnswerAsync(AgentPromptTemplates.ForTopProducts(topProducts), cancellationToken);
+            var answer = await GetAnswerAsync(AgentPromptTemplates.ForTopProducts(topProducts), cancellationToken);
 
             return new AgentResult(
                 answer,
@@ -113,7 +113,7 @@ public sealed class SalesAnalysisAgent(
         }
     }
 
-    private async Task<string> GetMockAnswerAsync(string prompt, CancellationToken cancellationToken)
+    private async Task<string> GetAnswerAsync(string prompt, CancellationToken cancellationToken)
     {
         var agent = agentFramework.CreateAgent(AgentDefinitions.SalesAnalysis);
         var session = await agent.CreateSessionAsync(cancellationToken);

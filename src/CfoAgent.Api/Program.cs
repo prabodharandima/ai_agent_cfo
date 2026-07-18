@@ -1,4 +1,5 @@
 using CfoAgent.Api.AI.Mock;
+using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents;
 using CfoAgent.Api.Configuration;
@@ -70,6 +71,7 @@ builder.Services.AddOptions<AiOptions>()
     .Validate(options => options.TimeoutSeconds is > 0 and <= 600, "AI:TimeoutSeconds must be between 1 and 600.")
     .Validate(options => double.IsFinite(options.Temperature) && options.Temperature is >= 0 and <= 2, "AI:Temperature must be finite and between 0 and 2.")
     .Validate(options => options.ContextLength is >= 1_024 and <= 32_768, "AI:ContextLength must be between 1024 and 32768.")
+    .Validate(options => options.MaxOutputTokens is >= 1 and <= 1_024 && options.MaxOutputTokens < options.ContextLength, "AI:MaxOutputTokens must be between 1 and 1024 and less than AI:ContextLength.")
     .Validate(options => options.SimulatedDelayMilliseconds >= 0, "AI:SimulatedDelayMilliseconds must not be negative.")
     .ValidateOnStart();
 
@@ -119,10 +121,11 @@ builder.Services.AddSingleton<IChatClient>(serviceProvider =>
     if (string.Equals(ai.Provider, "Ollama", StringComparison.OrdinalIgnoreCase))
     {
         var httpClient = serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(AiOptions.OllamaHttpClientName);
-        return new OllamaApiClient(httpClient)
-        {
-            SelectedModel = ai.Model
-        };
+        var transport = (IChatClient)new OllamaApiClient(httpClient, ai.Model);
+        return new OllamaChatClient(
+            transport,
+            ai,
+            serviceProvider.GetRequiredService<ILogger<OllamaChatClient>>());
     }
 
     throw new InvalidOperationException("AI provider configuration was not validated.");
@@ -178,7 +181,8 @@ builder.Services.AddHttpClient<ChromaClient>((serviceProvider, client) =>
 builder.Services.AddHealthChecks()
     .AddCheck<SqliteHealthCheck>("sqlite", tags: ["ready"])
     .AddCheck<ChromaHealthCheck>("chroma", tags: ["ready"])
-    .AddCheck<McpConfigurationHealthCheck>("mcp", tags: ["ready"]);
+    .AddCheck<McpConfigurationHealthCheck>("mcp", tags: ["ready"])
+    .AddCheck<OllamaHealthCheck>("ollama", tags: ["ready"]);
 
 var app = builder.Build();
 

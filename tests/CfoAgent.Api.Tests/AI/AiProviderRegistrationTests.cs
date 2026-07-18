@@ -1,5 +1,6 @@
 using System.Net;
 using CfoAgent.Api.AI.Mock;
+using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Tests.Api;
 using Microsoft.AspNetCore.Hosting;
@@ -8,7 +9,6 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using OllamaSharp;
 
 namespace CfoAgent.Api.Tests.AI;
 
@@ -33,7 +33,7 @@ public sealed class AiProviderRegistrationTests
         var chatClients = factory.Services.GetServices<IChatClient>().ToArray();
 
         Assert.Single(chatClients);
-        Assert.IsType<OllamaApiClient>(chatClients[0]);
+        Assert.IsType<OllamaChatClient>(chatClients[0]);
     }
 
     [Fact]
@@ -61,6 +61,7 @@ public sealed class AiProviderRegistrationTests
     [InlineData("AI:Model", "", "AI:Model")]
     [InlineData("AI:TimeoutSeconds", "0", "AI:TimeoutSeconds")]
     [InlineData("AI:ContextLength", "512", "AI:ContextLength")]
+    [InlineData("AI:MaxOutputTokens", "0", "AI:MaxOutputTokens")]
     [InlineData("AI:Temperature", "2.1", "AI:Temperature")]
     public async Task InvalidAiConfiguration_FailsPredictably(string key, string value, string expectedMessage)
     {
@@ -82,6 +83,7 @@ public sealed class AiProviderRegistrationTests
         builder.UseSetting("AI:TimeoutSeconds", "120");
         builder.UseSetting("AI:Temperature", "0");
         builder.UseSetting("AI:ContextLength", "4096");
+        builder.UseSetting("AI:MaxOutputTokens", "512");
     }
 
     private sealed class RequestCountingHandler : HttpMessageHandler
