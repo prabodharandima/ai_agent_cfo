@@ -43,9 +43,10 @@ These decisions are final for the initial version.
    - Agents are not microservices.
    - Agents do not communicate over HTTP with one another.
 
-3. **Use a Mock LLM only.**
-   - No OpenAI, Azure OpenAI, Ollama, Anthropic, Claude, or other real model call is permitted in this version.
-   - The Mock LLM must be deterministic and offline.
+3. **Use Mock by default, with optional local Ollama.**
+   - No OpenAI, Azure OpenAI, Anthropic, Claude, or other cloud model call is permitted in this version.
+   - The Mock LLM must remain deterministic and offline.
+   - Ollama is permitted only as the configuration-selected local `IChatClient` provider; normal tests must remain offline and it must never calculate authoritative financial values.
    - Use the Microsoft `IChatClient` abstraction rather than inventing a large custom LLM abstraction.
 
 4. **Financial calculations are deterministic.**
@@ -1094,7 +1095,7 @@ Configuration names may be adjusted to match the actual code, but responsibiliti
 
 Rules:
 
-- Only `Mock` is accepted as an AI provider in this MVP.
+- `Mock` and the optional local `Ollama` provider are accepted AI provider values. Mock remains the committed default.
 - Fail startup for unsupported provider values.
 - Both MCP integrations must remain disabled by default.
 - `UseLocalFallback` controls whether MCP failures may use deterministic local implementations.
@@ -1340,7 +1341,7 @@ E2E data and clock must be deterministic.
 
 ### Testing rules
 
-- Do not call a real LLM.
+- Do not call a real LLM in normal automated tests. Explicit opt-in local Ollama tests may run only when their documented prerequisite is available.
 - Do not depend on the public internet.
 - Do not weaken or delete tests to make a phase pass.
 - Fix implementation defects exposed by tests.
@@ -1502,7 +1503,7 @@ Final scripts may combine these steps, but they must remain transparent and repr
 
 ## 29. Production evolution discussion only
 
-The implementation remains Mock-only and local. Documentation may describe this future path:
+The implementation remains local: Mock is the default provider and Ollama is an optional local provider. Documentation may describe this future path:
 
 | MVP component                       | Possible production replacement                                                              |
 | ----------------------------------- | -------------------------------------------------------------------------------------------- |
@@ -1637,7 +1638,7 @@ Build the smallest solution that clearly demonstrates:
 
 - A working .NET multi-agent application.
 - Correct separation of structured finance calculations and RAG knowledge.
-- Safe, deterministic Mock LLM behavior.
+- Safe, deterministic Mock behavior with an optional, configuration-controlled local Ollama provider.
 - Two controlled, process-backed MCP integrations.
 - Secure read-only finance and knowledge access.
 - Explicit, tested local fallback behavior.
@@ -1645,4 +1646,3 @@ Build the smallest solution that clearly demonstrates:
 - Strong tests and clear Technical Lead trade-offs.
 
 Do not optimize for theoretical future scale. Optimize for a correct, understandable, interview-ready MVP that can be completed within two days.
-

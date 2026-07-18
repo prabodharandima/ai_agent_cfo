@@ -1,5 +1,5 @@
-using System.Text.Json;
 using System.Diagnostics;
+using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -14,6 +14,7 @@ public sealed class CfoOrchestratorAgent(
     ILogger<CfoOrchestratorAgent>? logger = null)
 {
     private const int MaximumSpecialistInvocations = 2;
+    private const int MaximumClassificationResponseCharacters = 64;
     private readonly ILogger<CfoOrchestratorAgent> _logger = logger ?? NullLogger<CfoOrchestratorAgent>.Instance;
 
     public async Task<CfoIntent> ClassifyAsync(string message, CancellationToken cancellationToken = default)
@@ -22,11 +23,11 @@ public sealed class CfoOrchestratorAgent(
 
         var agent = agentFramework.CreateAgent(AgentDefinitions.CfoOrchestrator);
         var session = await agent.CreateSessionAsync(cancellationToken);
-        var response = await agent.RunAsync($"[MOCK:CLASSIFY]\n{message}", session, options: null, cancellationToken);
+        var response = await agent.RunAsync(AgentPromptTemplates.ForClassification(message), session, options: null, cancellationToken);
 
-        return Enum.TryParse<CfoIntent>(response.Text, ignoreCase: true, out var intent)
+        return TryParseIntent(response.Text, out var intent)
             ? intent
-            : CfoIntent.Unsupported;
+            : ClassifyDeterministically(message);
     }
 
     public async Task<AgentResult> HandleAsync(AgentRequest request, CancellationToken cancellationToken = default)
@@ -65,6 +66,10 @@ public sealed class CfoOrchestratorAgent(
             _logger.LogWarning("CFO request cancelled. DurationMilliseconds: {DurationMilliseconds}", stopwatch.ElapsedMilliseconds);
             throw;
         }
+        catch (OllamaProviderException)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             _logger.LogWarning("CFO request failed. FailureType: {FailureType}; DurationMilliseconds: {DurationMilliseconds}", exception.GetType().Name, stopwatch.ElapsedMilliseconds);
@@ -95,7 +100,7 @@ public sealed class CfoOrchestratorAgent(
             result.ResponseType,
             result.StructuredData));
         var response = await agent.RunAsync(
-            $"[MOCK:ORCHESTRATE]\n{JsonSerializer.Serialize(verifiedOutputs)}",
+            AgentPromptTemplates.ForOrchestration(verifiedOutputs),
             session,
             options: null,
             cancellationToken);
@@ -119,5 +124,67 @@ public sealed class CfoOrchestratorAgent(
         Array.Empty<AgentSource>(),
         Array.Empty<string>(),
         Array.Empty<string>(),
-        null);
+            null);
+
+    private static bool TryParseIntent(string? response, out CfoIntent intent)
+    {
+        intent = CfoIntent.Unsupported;
+        if (string.IsNullOrWhiteSpace(response) || response.Length > MaximumClassificationResponseCharacters)
+        {
+            return false;
+        }
+
+        var candidate = response.Trim();
+        foreach (var allowedIntent in Enum.GetValues<CfoIntent>())
+        {
+            if (string.Equals(candidate, allowedIntent.ToString(), StringComparison.OrdinalIgnoreCase))
+            {
+                intent = allowedIntent;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static CfoIntent ClassifyDeterministically(string message)
+    {
+        var normalized = message.ToUpperInvariant();
+        var hasForecast = normalized.Contains("FORECAST", StringComparison.Ordinal);
+        var hasKnowledge = normalized.Contains("TARGET", StringComparison.Ordinal)
+            || normalized.Contains("ASSUMPTION", StringComparison.Ordinal)
+            || normalized.Contains("RISK", StringComparison.Ordinal);
+
+        if (hasForecast && hasKnowledge)
+        {
+            return CfoIntent.Mixed;
+        }
+
+        if (hasForecast)
+        {
+            return CfoIntent.Forecast;
+        }
+
+        if (normalized.Contains("COMPARE", StringComparison.Ordinal) || normalized.Contains("VERSUS", StringComparison.Ordinal))
+        {
+            return CfoIntent.SalesComparison;
+        }
+
+        if (normalized.Contains("TOP", StringComparison.Ordinal) && normalized.Contains("PRODUCT", StringComparison.Ordinal))
+        {
+            return CfoIntent.TopProducts;
+        }
+
+        if (hasKnowledge)
+        {
+            return CfoIntent.Knowledge;
+        }
+
+        if (normalized.Contains("SALES", StringComparison.Ordinal) || normalized.Contains("WEEK", StringComparison.Ordinal))
+        {
+            return CfoIntent.SalesSummary;
+        }
+
+        return CfoIntent.Unsupported;
+    }
 }

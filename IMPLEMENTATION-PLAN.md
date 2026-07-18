@@ -163,7 +163,7 @@ Do not add:
 - Long-term chat memory
 - Background job frameworks
 - Advanced model evaluation
-- Real LLM providers
+- Cloud LLM providers beyond the optional local Ollama provider
 - Cloud deployment
 
 ## Production discussion only
@@ -187,4 +187,3 @@ For `TASK-CFO-018` and later tasks:
 - Run serialized solution build/test commands shown above.
 - Treat 99 passing tests as the minimum checkpoint; later tasks may increase the count.
 - Update documentation when externally visible behavior changes.
-

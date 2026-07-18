@@ -89,16 +89,24 @@ public sealed class FinancialKnowledgeAgent(
         foreach (var source in sources)
         {
             var header = $"Source: {source.DocumentName} | Section: {source.Section} | Period: {source.Period} | Path: {source.SourcePath}\n";
-            var remaining = _options.MaxKnowledgeContextCharacters - context.Length - header.Length;
-            if (remaining <= 0)
+            var separator = context.Length == 0 ? string.Empty : "\n\n";
+            var remaining = _options.MaxKnowledgeContextCharacters - context.Length - separator.Length;
+            if (remaining < header.Length)
             {
                 break;
             }
 
+            context.Append(separator).Append(header);
+            remaining -= header.Length;
             var content = source.Content.Length <= remaining ? source.Content : source.Content[..remaining];
-            context.Append(header).AppendLine(content).AppendLine();
+            context.Append(content);
+
+            if (content.Length < source.Content.Length)
+            {
+                break;
+            }
         }
 
-        return context.ToString().TrimEnd();
+        return context.ToString();
     }
 }
