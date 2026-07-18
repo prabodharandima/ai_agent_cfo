@@ -47,6 +47,17 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
         Assert.True(body.TryGetProperty("dataPeriod", out _));
         Assert.Equal("Mock", body.GetProperty("model").GetProperty("provider").GetString());
         Assert.DoesNotContain("CfoAgent.Api.Models", responseBody, StringComparison.Ordinal);
+
+        if (responseType == "knowledge")
+        {
+            Assert.Contains(
+                body.GetProperty("sources").EnumerateArray(),
+                source => source.GetProperty("sourcePath").GetString() == "data/knowledge/current-budget-and-target.md");
+        }
+        else
+        {
+            Assert.Equal(JsonValueKind.Object, body.GetProperty("structuredData").ValueKind);
+        }
     }
 
     [Theory]
@@ -87,7 +98,11 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
         var body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("temporarily unavailable", body, StringComparison.OrdinalIgnoreCase);
+        using var document = JsonDocument.Parse(body);
+        Assert.Equal(503, document.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal("CFO assistant is temporarily unavailable.", document.RootElement.GetProperty("title").GetString());
+        Assert.Equal("https://httpstatuses.com/503", document.RootElement.GetProperty("type").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("traceId").GetString()));
         Assert.DoesNotContain("Mock chat failure", body, StringComparison.Ordinal);
         Assert.DoesNotContain("stackTrace", body, StringComparison.OrdinalIgnoreCase);
     }

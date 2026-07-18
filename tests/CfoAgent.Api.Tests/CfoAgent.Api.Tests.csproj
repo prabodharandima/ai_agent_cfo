@@ -21,8 +21,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CfoAgent.Api\CfoAgent.Api.csproj" />
-    <ProjectReference Include="..\..\tools\CfoAgent.FinanceMcpServer\CfoAgent.FinanceMcpServer.csproj" ReferenceOutputAssembly="false" />
-    <ProjectReference Include="..\..\tools\CfoAgent.KnowledgeFileMcpServer\CfoAgent.KnowledgeFileMcpServer.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\tools\CfoAgent.FinanceMcpServer\CfoAgent.FinanceMcpServer.csproj" />
+    <ProjectReference Include="..\..\tools\CfoAgent.KnowledgeFileMcpServer\CfoAgent.KnowledgeFileMcpServer.csproj" />
   </ItemGroup>
 
 </Project>
