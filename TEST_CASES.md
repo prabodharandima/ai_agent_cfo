@@ -160,7 +160,7 @@ If ChromaDB was stopped with `docker compose down -v`, run the seed and ingestio
 1. With the API running, execute this in PowerShell:
 
    ```powershell
-   Invoke-RestMethod -Method Post -Uri http://localhost:5260/api/chat -ContentType 'application/json' -Body '{"message":"   "}'
+   curl.exe -i -X POST http://localhost:5260/api/chat -H 'Content-Type: application/json' -d '{"message":"   "}'
    ```
 
 2. Inspect the returned error response.
