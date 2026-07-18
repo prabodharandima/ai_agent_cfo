@@ -41,7 +41,7 @@ public sealed class ContractFreezeTests
     [Fact]
     public async Task FinanceToolOutputsAndControlledErrorsAreFrozen()
     {
-        await using var database = await TemporaryFinanceDatabase.CreateAsync();
+        await using var database = await TemporaryFinanceMcpDatabase.CreateAsync();
         var product = await database.AddProductAsync("P8-ALPHA", "Phase Eight Alpha");
         database.AddSale(product, "P8-2021", new DateOnly(2021, 7, 15), 1, 100m, 0m, 40m);
         database.AddSale(product, "P8-2022", new DateOnly(2022, 7, 15), 1, 200m, 0m, 80m);

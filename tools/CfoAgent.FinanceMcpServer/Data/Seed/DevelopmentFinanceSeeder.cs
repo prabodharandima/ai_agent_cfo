@@ -1,11 +1,10 @@
-using CfoAgent.Api.Configuration;
-using CfoAgent.Api.Models.Finance;
+using CfoAgent.FinanceMcpServer.Configuration;
+using CfoAgent.FinanceMcpServer.Models.Finance;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
-namespace CfoAgent.Api.Data.Seed;
+namespace CfoAgent.FinanceMcpServer.Data.Seed;
 
-// Phase 8 compatibility copy. Finance MCP owns the seed definition; remove this API copy in TASK-CFO-P8-008.
 public sealed class DevelopmentFinanceSeeder(FinanceDbContext dbContext, IOptions<FinanceOptions> financeOptions)
 {
     private static readonly ProductDefinition[] ProductDefinitions =
@@ -161,45 +160,39 @@ public sealed class DevelopmentFinanceSeeder(FinanceDbContext dbContext, IOption
         }
     }
 
-    private static int GetSeasonalQuantityAdjustment(int month)
+    private static int GetSeasonalQuantityAdjustment(int month) => month switch
     {
-        return month switch
-        {
-            1 => -3,
-            2 => -2,
-            3 => 0,
-            4 => 1,
-            5 => 2,
-            6 => 3,
-            7 => 2,
-            8 => 3,
-            9 => 5,
-            10 => 7,
-            11 => 9,
-            12 => 14,
-            _ => throw new ArgumentOutOfRangeException(nameof(month))
-        };
-    }
+        1 => -3,
+        2 => -2,
+        3 => 0,
+        4 => 1,
+        5 => 2,
+        6 => 3,
+        7 => 2,
+        8 => 3,
+        9 => 5,
+        10 => 7,
+        11 => 9,
+        12 => 14,
+        _ => throw new ArgumentOutOfRangeException(nameof(month))
+    };
 
-    private static decimal GetMonthlyBudgetWeight(int month)
+    private static decimal GetMonthlyBudgetWeight(int month) => month switch
     {
-        return month switch
-        {
-            1 => 0.85m,
-            2 => 0.88m,
-            3 => 0.94m,
-            4 => 0.96m,
-            5 => 0.98m,
-            6 => 1.00m,
-            7 => 1.02m,
-            8 => 1.04m,
-            9 => 1.06m,
-            10 => 1.08m,
-            11 => 1.09m,
-            12 => 1.10m,
-            _ => throw new ArgumentOutOfRangeException(nameof(month))
-        };
-    }
+        1 => 0.85m,
+        2 => 0.88m,
+        3 => 0.94m,
+        4 => 0.96m,
+        5 => 0.98m,
+        6 => 1.00m,
+        7 => 1.02m,
+        8 => 1.04m,
+        9 => 1.06m,
+        10 => 1.08m,
+        11 => 1.09m,
+        12 => 1.10m,
+        _ => throw new ArgumentOutOfRangeException(nameof(month))
+    };
 
     private sealed record ProductDefinition(string Code, string Name, string Category, decimal UnitPrice, decimal UnitCost);
 }

@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace CfoAgent.Api.Features.Sales;
 
+// Phase 8 compatibility path. Finance MCP owns these queries; remove this local service in TASK-CFO-P8-008.
 public sealed class SalesAnalysisService(FinanceDbContext dbContext, TimeProvider timeProvider)
 {
     /// <summary>

@@ -1,4 +1,4 @@
-using CfoAgent.Api.Data;
+using CfoAgent.FinanceMcpServer.Data;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;

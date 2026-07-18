@@ -1,9 +1,8 @@
-using CfoAgent.Api.Models.Finance;
+using CfoAgent.FinanceMcpServer.Models.Finance;
 using Microsoft.EntityFrameworkCore;
 
-namespace CfoAgent.Api.Data;
+namespace CfoAgent.FinanceMcpServer.Data;
 
-// Phase 8 compatibility copy. Remove from the API in TASK-CFO-P8-008 after remote Finance MCP replaces local persistence.
 public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options) : DbContext(options)
 {
     public DbSet<Product> Products => Set<Product>();
