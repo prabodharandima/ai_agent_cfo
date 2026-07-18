@@ -1,0 +1,17 @@
+{
+  "phase": 7,
+  "model": "llama3.2:3b",
+  "task_count": 8,
+  "files": [
+    "README-PHASE-7.md",
+    "tasks/phase-7/PHASE-7-EXECUTION-ORDER.md",
+    "tasks/phase-7/TASK-CFO-P7-001-ollama-discovery-and-design.md",
+    "tasks/phase-7/TASK-CFO-P7-002-ollama-options-and-registration.md",
+    "tasks/phase-7/TASK-CFO-P7-003-ollama-chat-client.md",
+    "tasks/phase-7/TASK-CFO-P7-004-agent-integration-and-guardrails.md",
+    "tasks/phase-7/TASK-CFO-P7-005-resilience-health-and-logging.md",
+    "tasks/phase-7/TASK-CFO-P7-006-offline-test-gate.md",
+    "tasks/phase-7/TASK-CFO-P7-007-live-ollama-integration-tests.md",
+    "tasks/phase-7/TASK-CFO-P7-008-documentation-and-phase-gate.md"
+  ]
+}
