@@ -52,7 +52,6 @@ function App() {
           <p className="eyebrow">Executive finance workspace</p>
           <h1>CFO AI Agent</h1>
         </div>
-        <span className="mock-badge">Mock LLM</span>
       </header>
       <section className="prompt-library" aria-label="Example CFO prompts">
         <h2>Start with a CFO question</h2>

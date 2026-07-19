@@ -19,6 +19,14 @@ Financial values are deterministic C# and SQL results. `MockChatClient` is the d
 
 Prerequisites: Docker Desktop, .NET SDK selected by `global.json`, and Node.js 22 or later for local frontend validation. Ollama is optional and runs on the Windows host.
 
+Docker Compose reads deployment settings from the root `.env` file. It is intentionally ignored by Git. Fresh clones should create it from the tracked template before starting:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Set `AI_PROVIDER=Mock` for the offline default, or set `AI_PROVIDER=Ollama` and `AI_MODEL=llama3.2:3b` after installing Ollama on the Windows host. The `.env` file also holds local PostgreSQL credentials, ports, MCP endpoints, and Chroma/RAG settings.
+
 ```powershell
 docker compose up --build -d
 ```
@@ -37,7 +45,7 @@ Use `docker compose ps`, `docker compose logs --no-color`, and `docker compose d
 
 ## Providers
 
-Default configuration is `AI:Provider=Mock` and `AI:Model=DeterministicMock`. To use the optional host Ollama provider, set `AI__Provider=Ollama`, `AI__Model=llama3.2:3b`, and `AI__BaseUrl=http://localhost:11434` for local host execution. Compose reaches it at `http://host.docker.internal:11434`. Startup never downloads or starts Ollama, and there is no automatic Ollama-to-Mock fallback.
+Default Docker configuration is `AI_PROVIDER=Mock` and `AI_MODEL=DeterministicMock` in `.env`. To use the optional host Ollama provider, set `AI_PROVIDER=Ollama` and `AI_MODEL=llama3.2:3b` in `.env`, then recreate the API with `docker compose up -d --force-recreate api`. Compose reaches it at `http://host.docker.internal:11434`. Startup never downloads or starts Ollama, and there is no automatic Ollama-to-Mock fallback.
 
 ## Service boundaries
 
@@ -62,3 +70,5 @@ npm run test:e2e:container
 ```
 
 Run `scripts/test-phase-8-containers.ps1` from the repository root for the isolated real-container resilience gate. See [Phase 8 results](docs/PHASE-8-RESULTS.md), [architecture](APPLICATION_ARCHITECTURE.md), [demo script](docs/DEMO-SCRIPT.md), and [security notes](docs/SECURITY-NOTES.md).
+
+For a full first-run, verification, MCP, frontend-development, and troubleshooting walkthrough, see [USER-GUIDE.md](USER-GUIDE.md).
