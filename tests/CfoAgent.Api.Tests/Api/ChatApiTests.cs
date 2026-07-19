@@ -2,11 +2,15 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using CfoAgent.Api.Features.Sales;
+using CfoAgent.Api.Health;
+using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Rag.Chroma;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 
 namespace CfoAgent.Api.Tests.Api;
@@ -108,6 +112,24 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
     }
 
     [Fact]
+    public async Task PostChat_ReturnsSanitized503WhenFinanceMcpIsUnavailable()
+    {
+        await using var factory = ChatApiFactory.CreateFinanceDependencyFailing();
+        using var client = factory.CreateClient();
+
+        using var response = await client.PostAsJsonAsync("/api/chat", new { message = "Give me the sales summary of this week." });
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        var body = await response.Content.ReadAsStringAsync();
+        using var document = JsonDocument.Parse(body);
+        Assert.Equal(503, document.RootElement.GetProperty("status").GetInt32());
+        Assert.Equal("A required dependency is temporarily unavailable.", document.RootElement.GetProperty("title").GetString());
+        Assert.DoesNotContain("finance-mcp.internal", body, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("stackTrace", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task PostChat_ReturnsTheCallerCorrelationIdWithoutEchoingThePrompt()
     {
         using var client = _factory.CreateClient();
@@ -124,7 +146,7 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
     }
 
     [Fact]
-    public async Task ReadyHealthEndpointReportsSqliteChromaAndMcpConfiguration()
+    public async Task ReadyHealthEndpointReportsChromaAndMcpConfiguration()
     {
         using var client = _factory.CreateClient();
 
@@ -135,7 +157,6 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
         var dependencies = document.RootElement.GetProperty("dependencies").EnumerateArray()
             .Select(dependency => dependency.GetProperty("name").GetString())
             .ToArray();
-        Assert.Contains("sqlite", dependencies);
         Assert.Contains("chroma", dependencies);
         Assert.Contains("mcp", dependencies);
     }
@@ -144,34 +165,127 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
 public sealed class ChatApiFactory : WebApplicationFactory<Program>
 {
     private readonly bool _simulateMockFailure;
+    private readonly bool _simulateFinanceDependencyFailure;
 
     public ChatApiFactory()
-        : this(simulateMockFailure: false)
+        : this(simulateMockFailure: false, simulateFinanceDependencyFailure: false)
     {
     }
 
-    private ChatApiFactory(bool simulateMockFailure)
+    private ChatApiFactory(bool simulateMockFailure, bool simulateFinanceDependencyFailure)
     {
         _simulateMockFailure = simulateMockFailure;
+        _simulateFinanceDependencyFailure = simulateFinanceDependencyFailure;
     }
 
-    public static ChatApiFactory CreateFailing() => new(simulateMockFailure: true);
+    public static ChatApiFactory CreateFailing() => new(simulateMockFailure: true, simulateFinanceDependencyFailure: false);
+
+    public static ChatApiFactory CreateFinanceDependencyFailing() => new(simulateMockFailure: false, simulateFinanceDependencyFailure: true);
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         var repositoryRoot = FindRepositoryRoot();
         builder.UseEnvironment("Testing");
-        builder.UseSetting("Database:ConnectionString", $"Data Source={Path.Combine(repositoryRoot, "data", "cfo-agent.db")}");
         builder.UseSetting("Rag:KnowledgeFilesRoot", Path.Combine(repositoryRoot, "data", "knowledge"));
-        builder.UseSetting("Mcp:Finance:Enabled", "false");
+        builder.UseSetting("Mcp:Finance:Enabled", "true");
         builder.UseSetting("Mcp:KnowledgeFiles:Enabled", "false");
         builder.UseSetting("AI:SimulateFailure", _simulateMockFailure.ToString());
         builder.ConfigureLogging(logging => logging.ClearProviders());
         builder.ConfigureTestServices(services =>
         {
+            services.RemoveAll<FinanceMcpClient>();
+            services.RemoveAll<IFinanceMcpClient>();
+            services.RemoveAll<IFinanceMcpRemoteClient>();
+            var financeClient = new TestFinanceMcpClient(_simulateFinanceDependencyFailure);
+            services.AddSingleton<IFinanceMcpClient>(financeClient);
+            services.AddSingleton<IFinanceMcpRemoteClient>(financeClient);
+            services.AddHttpClient<ChromaHealthCheck>()
+                .ConfigurePrimaryHttpMessageHandler(static () => new KnowledgeHandler());
             services.AddHttpClient<ChromaClient>()
                 .ConfigurePrimaryHttpMessageHandler(static () => new KnowledgeHandler());
         });
+    }
+
+    private sealed class TestFinanceMcpClient(bool simulateFailure) : IFinanceMcpRemoteClient
+    {
+        private static readonly SalesPeriod CurrentWeek = new(new DateOnly(2026, 7, 13), new DateOnly(2026, 7, 15));
+
+        public Task<IReadOnlyList<string>> DiscoverToolsAsync(CancellationToken cancellationToken)
+        {
+            ThrowIfUnavailable(cancellationToken);
+            return Task.FromResult<IReadOnlyList<string>>(
+                ["compare_sales_periods", "get_budget_target", "get_historical_sales", "get_sales_summary", "get_top_products"]);
+        }
+
+        public Task<SalesSummary> GetCurrentWeekSummaryAsync(CancellationToken cancellationToken)
+        {
+            ThrowIfUnavailable(cancellationToken);
+            return Task.FromResult(CreateSummary(CurrentWeek, 1200m));
+        }
+
+        public Task<WeeklySalesComparison> GetWeekOverWeekComparisonAsync(CancellationToken cancellationToken)
+        {
+            ThrowIfUnavailable(cancellationToken);
+            var previous = new SalesPeriod(new DateOnly(2026, 7, 6), new DateOnly(2026, 7, 12));
+            return Task.FromResult(new WeeklySalesComparison(
+                CreateSummary(CurrentWeek, 1200m),
+                CreateSummary(previous, 1000m),
+                200m,
+                20m,
+                SalesChangeDirection.Increased,
+                Array.Empty<string>()));
+        }
+
+        public Task<TopProductsResult> GetCurrentMonthTopProductsAsync(CancellationToken cancellationToken)
+        {
+            ThrowIfUnavailable(cancellationToken);
+            return Task.FromResult(new TopProductsResult(
+                new SalesPeriod(new DateOnly(2026, 7, 1), new DateOnly(2026, 7, 15)),
+                [new TopProduct("FIN-001", "Ledger Pro", 4m, 1200m, 800m)],
+                Array.Empty<string>()));
+        }
+
+        public Task<HistoricalYearlySalesResult> GetHistoricalYearlyTotalsAsync(CancellationToken cancellationToken)
+        {
+            ThrowIfUnavailable(cancellationToken);
+            return Task.FromResult(new HistoricalYearlySalesResult(
+                [
+                    new YearlySalesTotal(2021, 100m),
+                    new YearlySalesTotal(2022, 200m),
+                    new YearlySalesTotal(2023, 300m),
+                    new YearlySalesTotal(2024, 400m),
+                    new YearlySalesTotal(2025, 500m)
+                ],
+                Array.Empty<string>()));
+        }
+
+        public Task<BudgetTargetResult> GetBudgetTargetAsync(int year, int? month, CancellationToken cancellationToken)
+        {
+            ThrowIfUnavailable(cancellationToken);
+            return Task.FromResult(new BudgetTargetResult(year, month, true, 3_000_000m, 1_000_000m, "budget", Array.Empty<string>()));
+        }
+
+        private static SalesSummary CreateSummary(SalesPeriod period, decimal revenue) => new(
+            period,
+            revenue,
+            400m,
+            revenue - 400m,
+            (revenue - 400m) / revenue * 100m,
+            4m,
+            2,
+            revenue / 2m,
+            new TopProduct("FIN-001", "Ledger Pro", 4m, revenue, revenue - 400m),
+            Array.Empty<string>());
+
+        private void ThrowIfUnavailable(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (simulateFailure)
+            {
+                throw new McpDependencyException("Finance MCP", McpDependencyFailureKind.Unavailable,
+                    new HttpRequestException("http://finance-mcp.internal/private"));
+            }
+        }
     }
 
     private static string FindRepositoryRoot()

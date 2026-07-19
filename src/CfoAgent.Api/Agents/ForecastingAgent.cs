@@ -8,8 +8,7 @@ namespace CfoAgent.Api.Agents;
 public sealed class ForecastingAgent(
     SalesForecastingService salesForecastingService,
     CfoAgentFramework agentFramework,
-    IFinanceMcpClient? financeMcpClient = null,
-    FinanceMcpFallback? financeMcpFallback = null)
+    IFinanceMcpClient financeMcpClient)
 {
     public async Task<AgentResult> GetForecastAsync(AgentRequest request, CancellationToken cancellationToken)
     {
@@ -41,6 +40,10 @@ public sealed class ForecastingAgent(
         {
             throw;
         }
+        catch (McpDependencyException)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             throw new InvalidOperationException("The forecasting agent could not produce a forecast.", exception);
@@ -49,17 +52,8 @@ public sealed class ForecastingAgent(
 
     private async Task<SalesForecastResult> GetForecastAsync(CancellationToken cancellationToken)
     {
-        if (financeMcpClient is null || financeMcpFallback is null)
-        {
-            return await salesForecastingService.ForecastAsync(cancellationToken);
-        }
-
-        var historical = await financeMcpFallback.ExecuteAsync(
-            financeMcpClient.GetHistoricalYearlyTotalsAsync,
-            salesForecastingService.GetHistoricalYearlyTotalsAsync,
-            cancellationToken);
-
-        return salesForecastingService.Forecast(historical.Value);
+        var historical = await financeMcpClient.GetHistoricalYearlyTotalsAsync(cancellationToken);
+        return salesForecastingService.Forecast(historical);
     }
 
     private static AgentDataPeriod? ToDataPeriod(SalesForecastResult forecast)

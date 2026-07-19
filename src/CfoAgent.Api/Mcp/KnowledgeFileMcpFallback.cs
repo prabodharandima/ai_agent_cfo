@@ -3,7 +3,10 @@ using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Mcp;
 
-public sealed class KnowledgeFileMcpFallback(IOptions<McpOptions> options, ILogger<KnowledgeFileMcpFallback> logger)
+public sealed class KnowledgeFileMcpFallback(
+    IOptions<McpOptions> options,
+    IHostEnvironment environment,
+    ILogger<KnowledgeFileMcpFallback> logger)
 {
     public Task<McpFallbackResult<T>> ExecuteAsync<T>(
         Func<CancellationToken, Task<T>> mcpOperation,
@@ -14,7 +17,9 @@ public sealed class KnowledgeFileMcpFallback(IOptions<McpOptions> options, ILogg
         ArgumentNullException.ThrowIfNull(directOperation);
 
         return !options.Value.KnowledgeFiles.Enabled
-            ? UseDirectAsync(directOperation, "disabled", null, cancellationToken)
+            ? CanUseLocalFallback
+                ? UseDirectAsync(directOperation, "disabled", null, cancellationToken)
+                : Task.FromException<McpFallbackResult<T>>(new McpDependencyException("Knowledge File MCP", McpDependencyFailureKind.Disabled))
             : TryMcpAsync(mcpOperation, directOperation, cancellationToken);
     }
 
@@ -32,9 +37,15 @@ public sealed class KnowledgeFileMcpFallback(IOptions<McpOptions> options, ILogg
         {
             throw;
         }
-        catch (Exception exception) when (options.Value.UseLocalFallback)
+        catch (McpDependencyException exception) when (CanUseLocalFallback)
         {
-            return await UseDirectAsync(directOperation, exception is OperationCanceledException or TimeoutException ? "timeout" : "unavailable", exception, cancellationToken);
+            var reason = exception.FailureKind switch
+            {
+                McpDependencyFailureKind.Timeout => "timeout",
+                McpDependencyFailureKind.CapabilityMismatch => "capability-mismatch",
+                _ => "unavailable"
+            };
+            return await UseDirectAsync(directOperation, reason, exception, cancellationToken);
         }
     }
 
@@ -59,4 +70,7 @@ public sealed class KnowledgeFileMcpFallback(IOptions<McpOptions> options, ILogg
         var value = await directOperation(cancellationToken);
         return new McpFallbackResult<T>(value, true, reason);
     }
+
+    private bool CanUseLocalFallback =>
+        options.Value.KnowledgeFiles.UseLocalFallback && environment.IsDevelopment();
 }

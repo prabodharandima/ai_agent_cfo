@@ -2,12 +2,12 @@ using CfoAgent.Api.Tests.Finance;
 using CfoAgent.FinanceMcpServer;
 using CfoAgent.FinanceMcpServer.Configuration;
 using CfoAgent.FinanceMcpServer.Data.Seed;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Tests.PhaseEight;
 
-public sealed class FinanceMcpOwnershipTests
+[Collection(FinancePostgreSqlCollection.Name)]
+public sealed class FinanceMcpOwnershipTests(FinancePostgreSqlFixture postgres)
 {
     private static readonly DateOnly DemoDate = new(2026, 7, 15);
 
@@ -25,20 +25,20 @@ public sealed class FinanceMcpOwnershipTests
     [Fact]
     public async Task FinanceMcpOwnsDeterministicIdempotentSeedAndAllFiveQueries()
     {
-        await using var database = await TemporaryFinanceMcpDatabase.CreateAsync();
+        await using var context = postgres.CreateDbContext();
         var seeder = new DevelopmentFinanceSeeder(
-            database.Context,
+            context,
             Options.Create(new FinanceOptions { DemoDate = DemoDate }));
 
         await seeder.SeedAsync(CancellationToken.None);
-        var firstCounts = await GetCountsAsync(database);
+        var firstCounts = await postgres.GetCountsAsync();
         await seeder.SeedAsync(CancellationToken.None);
-        var secondCounts = await GetCountsAsync(database);
+        var secondCounts = await postgres.GetCountsAsync();
 
         Assert.Equal((8, 1_104, 18), firstCounts);
         Assert.Equal(firstCounts, secondCounts);
 
-        var tools = new FinanceMcpTools(database.Context);
+        var tools = new FinanceMcpTools(context);
         var summary = await tools.GetSalesSummaryAsync("2026-07-13", "2026-07-15", CancellationToken.None);
         var comparison = await tools.CompareSalesPeriodsAsync("2026-07-13", "2026-07-15", "2026-07-06", "2026-07-12", CancellationToken.None);
         var topProducts = await tools.GetTopProductsAsync("2026-07-01", "2026-07-15", 5, CancellationToken.None);
@@ -58,8 +58,4 @@ public sealed class FinanceMcpOwnershipTests
         Assert.Equal(3_000_000m, budget.Data.SalesTarget);
     }
 
-    private static async Task<(int Products, int Sales, int BudgetTargets)> GetCountsAsync(TemporaryFinanceMcpDatabase database) =>
-        (await database.Context.Products.CountAsync(),
-         await database.Context.Sales.CountAsync(),
-         await database.Context.BudgetTargets.CountAsync());
 }

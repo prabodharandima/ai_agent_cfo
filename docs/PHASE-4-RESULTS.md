@@ -1,5 +1,7 @@
 # Phase 4 Results
 
+> Historical record: the described stdio MCP implementation was superseded in Phase 8 by hosted Streamable HTTP MCP services. See [PHASE-8-RESULTS.md](PHASE-8-RESULTS.md).
+
 ## Scope
 
 Phase 4 validates the two independent, process-backed MCP integrations while preserving the ASP.NET Core monolith, deterministic finance calculations, Mock LLM, and ChromaDB RAG responsibilities.

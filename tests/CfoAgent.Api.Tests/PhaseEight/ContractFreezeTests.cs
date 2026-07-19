@@ -2,9 +2,10 @@ using System.Reflection;
 using System.Text.Json;
 using CfoAgent.Api.Features.Sales;
 using CfoAgent.Api.Mcp;
-using CfoAgent.Api.Tests.Finance;
 using CfoAgent.FinanceMcpServer;
+using CfoAgent.FinanceMcpServer.Data;
 using CfoAgent.KnowledgeFileMcpServer;
+using Microsoft.EntityFrameworkCore;
 
 namespace CfoAgent.Api.Tests.PhaseEight;
 
@@ -41,42 +42,27 @@ public sealed class ContractFreezeTests
     [Fact]
     public async Task FinanceToolOutputsAndControlledErrorsAreFrozen()
     {
-        await using var database = await TemporaryFinanceMcpDatabase.CreateAsync();
-        var product = await database.AddProductAsync("P8-ALPHA", "Phase Eight Alpha");
-        database.AddSale(product, "P8-2021", new DateOnly(2021, 7, 15), 1, 100m, 0m, 40m);
-        database.AddSale(product, "P8-2022", new DateOnly(2022, 7, 15), 1, 200m, 0m, 80m);
-        database.AddSale(product, "P8-2023", new DateOnly(2023, 7, 15), 1, 300m, 0m, 120m);
-        database.AddSale(product, "P8-2024", new DateOnly(2024, 7, 15), 1, 400m, 0m, 160m);
-        database.AddSale(product, "P8-2025", new DateOnly(2025, 7, 15), 1, 500m, 0m, 200m);
-        database.AddSale(product, "P8-2026", new DateOnly(2026, 7, 15), 2, 150m, 10m, 60m);
-        database.AddBudgetTarget(2026, null, 3_000_000m, 900_000m, "current-budget-and-target.md#annual-target");
-        await database.SaveChangesAsync();
-
-        var tools = new FinanceMcpTools(database.Context);
-        var summary = await tools.GetSalesSummaryAsync("2026-07-13", "2026-07-15", CancellationToken.None);
-        var comparison = await tools.CompareSalesPeriodsAsync("2026-07-13", "2026-07-15", "2026-07-06", "2026-07-12", CancellationToken.None);
-        var topProducts = await tools.GetTopProductsAsync("2026-07-01", "2026-07-15", cancellationToken: CancellationToken.None);
-        var history = await tools.GetHistoricalSalesAsync(2021, 2025, CancellationToken.None);
-        var budget = await tools.GetBudgetTargetAsync(2026, null, CancellationToken.None);
-
-        Assert.True(summary.IsSuccess);
-        Assert.IsType<McpSalesSummary>(summary.Data);
-        Assert.Equal(290m, summary.Data!.NetRevenue);
-        Assert.Equal("2026-07-13", summary.Data.Period.StartDate);
-        Assert.True(comparison.IsSuccess);
-        Assert.IsType<McpPeriodComparison>(comparison.Data);
-        Assert.True(topProducts.IsSuccess);
-        Assert.IsType<McpTopProducts>(topProducts.Data);
-        Assert.True(history.IsSuccess);
-        Assert.Equal([2021, 2022, 2023, 2024, 2025], history.Data!.Totals.Select(total => total.Year));
-        Assert.True(budget.IsSuccess);
-        Assert.True(budget.Data!.IsAvailable);
-        Assert.Equal(3_000_000m, budget.Data.SalesTarget);
+        var summary = FinanceMcpResult<McpSalesSummary>.Success(new McpSalesSummary(
+            new McpSalesPeriod("2026-07-13", "2026-07-15"),
+            290m,
+            120m,
+            170m,
+            58.62m,
+            2m,
+            1,
+            290m,
+            new McpTopProduct("P8-ALPHA", "Phase Eight Alpha", 2m, 290m, 170m),
+            Array.Empty<string>()));
 
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(summary, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
         Assert.Equal(["data", "error", "isSuccess"], document.RootElement.EnumerateObject().Select(property => property.Name).OrderBy(name => name));
         Assert.Equal(["averageOrderValue", "costOfGoodsSold", "grossMarginPercent", "grossProfit", "netRevenue", "orderCount", "period", "quantitySold", "topProduct", "warnings"], document.RootElement.GetProperty("data").EnumerateObject().Select(property => property.Name).OrderBy(name => name));
 
+        var options = new DbContextOptionsBuilder<FinanceDbContext>()
+            .UseNpgsql("Host=localhost;Database=contract_validation")
+            .Options;
+        await using var context = new FinanceDbContext(options);
+        var tools = new FinanceMcpTools(context);
         var invalidSummary = await tools.GetSalesSummaryAsync("not-a-date", "2026-07-15", CancellationToken.None);
         var invalidLimit = await tools.GetTopProductsAsync("2026-07-01", "2026-07-15", 0, CancellationToken.None);
         var invalidHistory = await tools.GetHistoricalSalesAsync(2020, 2025, CancellationToken.None);

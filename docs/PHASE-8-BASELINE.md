@@ -1,5 +1,7 @@
 # Phase 8 Contract Freeze Baseline
 
+> Historical record: this pre-migration SQLite/stdio baseline is superseded by the completed Phase 8 deployment documented in [PHASE-8-RESULTS.md](PHASE-8-RESULTS.md).
+
 ## Scope
 
 This baseline is established by `TASK-CFO-P8-002-contract-freeze-and-baseline-gate` before the Phase 8 persistence and transport migration. It freezes externally meaningful behavior without changing the current stdio transport, SQLite implementation, Docker configuration, or public chat API.

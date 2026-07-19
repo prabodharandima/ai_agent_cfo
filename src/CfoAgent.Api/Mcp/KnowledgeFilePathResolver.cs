@@ -21,13 +21,6 @@ internal static class KnowledgeFilePathResolver
             ?? Path.GetFullPath(configuredRoot, environment.ContentRootPath);
     }
 
-    public static string ResolveServerProject(IHostEnvironment environment)
-    {
-        const string relativeProject = "tools/CfoAgent.KnowledgeFileMcpServer";
-        return FindExistingDirectory(relativeProject, environment)
-            ?? throw new FileNotFoundException("The restricted knowledge filesystem MCP server project was not found.");
-    }
-
     private static string? FindExistingDirectory(string relativePath, IHostEnvironment environment)
     {
         foreach (var startPath in new[] { environment.ContentRootPath, AppContext.BaseDirectory })

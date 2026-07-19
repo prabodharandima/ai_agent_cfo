@@ -43,10 +43,10 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options)
         entity.ToTable(table =>
         {
             table.HasCheckConstraint("CK_Sales_Quantity_Positive", "\"Quantity\" > 0");
-            table.HasCheckConstraint("CK_Sales_UnitPrice_NonNegative", "CAST(\"UnitPrice\" AS REAL) >= 0");
-            table.HasCheckConstraint("CK_Sales_Discount_NonNegative", "CAST(\"DiscountAmount\" AS REAL) >= 0");
-            table.HasCheckConstraint("CK_Sales_UnitCost_NonNegative", "CAST(\"UnitCost\" AS REAL) >= 0");
-            table.HasCheckConstraint("CK_Sales_Discount_DoesNotExceedGross", "CAST(\"DiscountAmount\" AS REAL) <= \"Quantity\" * CAST(\"UnitPrice\" AS REAL)");
+            table.HasCheckConstraint("CK_Sales_UnitPrice_NonNegative", "\"UnitPrice\" >= 0");
+            table.HasCheckConstraint("CK_Sales_Discount_NonNegative", "\"DiscountAmount\" >= 0");
+            table.HasCheckConstraint("CK_Sales_UnitCost_NonNegative", "\"UnitCost\" >= 0");
+            table.HasCheckConstraint("CK_Sales_Discount_DoesNotExceedGross", "\"DiscountAmount\" <= \"Quantity\" * \"UnitPrice\"");
         });
     }
 
@@ -65,8 +65,8 @@ public sealed class FinanceDbContext(DbContextOptions<FinanceDbContext> options)
         {
             table.HasCheckConstraint("CK_BudgetTargets_Year_Positive", "\"Year\" > 0");
             table.HasCheckConstraint("CK_BudgetTargets_Month_Valid", "\"Month\" IS NULL OR (\"Month\" >= 1 AND \"Month\" <= 12)");
-            table.HasCheckConstraint("CK_BudgetTargets_SalesTarget_NonNegative", "CAST(\"SalesTarget\" AS REAL) >= 0");
-            table.HasCheckConstraint("CK_BudgetTargets_ProfitTarget_NonNegative", "\"ProfitTarget\" IS NULL OR CAST(\"ProfitTarget\" AS REAL) >= 0");
+            table.HasCheckConstraint("CK_BudgetTargets_SalesTarget_NonNegative", "\"SalesTarget\" >= 0");
+            table.HasCheckConstraint("CK_BudgetTargets_ProfitTarget_NonNegative", "\"ProfitTarget\" IS NULL OR \"ProfitTarget\" >= 0");
         });
     }
 }

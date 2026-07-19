@@ -1,5 +1,7 @@
 # Phase 8 Architecture Discovery and Migration Design
 
+> Historical record: this pre-implementation design is superseded by the completed Streamable HTTP/PostgreSQL deployment in [PHASE-8-RESULTS.md](PHASE-8-RESULTS.md).
+
 ## Document status
 
 - Task: `TASK-CFO-P8-001`

@@ -1,5 +1,7 @@
 # Phase 5 Results
 
+> Historical record: the described local SQLite/stdio E2E setup was superseded in Phase 8. See [PHASE-8-RESULTS.md](PHASE-8-RESULTS.md).
+
 ## Scope
 
 Phase 5 exposes the deterministic CFO orchestrator through `POST /api/chat` and provides a single React TypeScript chat page for the five MVP scenarios.

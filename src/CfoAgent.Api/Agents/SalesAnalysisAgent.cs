@@ -7,10 +7,8 @@ using Microsoft.Agents.AI;
 namespace CfoAgent.Api.Agents;
 
 public sealed class SalesAnalysisAgent(
-    SalesAnalysisService salesAnalysisService,
     CfoAgentFramework agentFramework,
-    IFinanceMcpClient? financeMcpClient = null,
-    FinanceMcpFallback? financeMcpFallback = null)
+    IFinanceMcpClient financeMcpClient)
 {
     public async Task<AgentResult> GetWeeklySummaryAsync(AgentRequest request, CancellationToken cancellationToken)
     {
@@ -18,10 +16,7 @@ public sealed class SalesAnalysisAgent(
 
         try
         {
-            var summary = await ExecuteFinanceAsync(
-                token => financeMcpClient!.GetCurrentWeekSummaryAsync(token),
-                salesAnalysisService.GetCurrentWeekSummaryAsync,
-                cancellationToken);
+            var summary = await financeMcpClient.GetCurrentWeekSummaryAsync(cancellationToken);
             var answer = await GetAnswerAsync(AgentPromptTemplates.ForSalesSummary(summary), cancellationToken);
 
             return new AgentResult(
@@ -38,6 +33,10 @@ public sealed class SalesAnalysisAgent(
         {
             throw;
         }
+        catch (McpDependencyException)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             throw new InvalidOperationException("The sales analysis agent could not produce a weekly summary.", exception);
@@ -50,10 +49,7 @@ public sealed class SalesAnalysisAgent(
 
         try
         {
-            var comparison = await ExecuteFinanceAsync(
-                token => financeMcpClient!.GetWeekOverWeekComparisonAsync(token),
-                salesAnalysisService.GetWeekOverWeekComparisonAsync,
-                cancellationToken);
+            var comparison = await financeMcpClient.GetWeekOverWeekComparisonAsync(cancellationToken);
             var answer = await GetAnswerAsync(AgentPromptTemplates.ForSalesComparison(comparison), cancellationToken);
             var warnings = comparison.CurrentWeek.Warnings
                 .Concat(comparison.PreviousWeek.Warnings)
@@ -75,6 +71,10 @@ public sealed class SalesAnalysisAgent(
         {
             throw;
         }
+        catch (McpDependencyException)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             throw new InvalidOperationException("The sales analysis agent could not produce a weekly comparison.", exception);
@@ -87,10 +87,7 @@ public sealed class SalesAnalysisAgent(
 
         try
         {
-            var topProducts = await ExecuteFinanceAsync(
-                token => financeMcpClient!.GetCurrentMonthTopProductsAsync(token),
-                salesAnalysisService.GetCurrentMonthTopProductsAsync,
-                cancellationToken);
+            var topProducts = await financeMcpClient.GetCurrentMonthTopProductsAsync(cancellationToken);
             var answer = await GetAnswerAsync(AgentPromptTemplates.ForTopProducts(topProducts), cancellationToken);
 
             return new AgentResult(
@@ -107,6 +104,10 @@ public sealed class SalesAnalysisAgent(
         {
             throw;
         }
+        catch (McpDependencyException)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             throw new InvalidOperationException("The sales analysis agent could not produce a top-products result.", exception);
@@ -120,20 +121,6 @@ public sealed class SalesAnalysisAgent(
         var response = await agent.RunAsync(prompt, session, options: null, cancellationToken);
 
         return response.Text;
-    }
-
-    private async Task<T> ExecuteFinanceAsync<T>(
-        Func<CancellationToken, Task<T>> mcpOperation,
-        Func<CancellationToken, Task<T>> localOperation,
-        CancellationToken cancellationToken)
-    {
-        if (financeMcpClient is null || financeMcpFallback is null)
-        {
-            return await localOperation(cancellationToken);
-        }
-
-        var result = await financeMcpFallback.ExecuteAsync(mcpOperation, localOperation, cancellationToken);
-        return result.Value;
     }
 
     private static AgentDataPeriod ToDataPeriod(SalesPeriod period, string label) => new(period.StartDate, period.EndDate, label);

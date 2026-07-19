@@ -1,10 +1,177 @@
 services:
+  postgres:
+    image: postgres:17.7-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cfo_agent}
+      POSTGRES_USER: ${POSTGRES_USER:-cfo_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cfo-agent-local-only}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  finance-db-init:
+    image: cfo-agent-finance-mcp:local
+    build:
+      context: .
+      dockerfile: tools/CfoAgent.FinanceMcpServer/Dockerfile
+    command: ["--seed"]
+    environment:
+      ConnectionStrings__FinanceDatabase: Host=postgres;Port=5432;Database=${POSTGRES_DB:-cfo_agent};Username=${POSTGRES_USER:-cfo_agent};Password=${POSTGRES_PASSWORD:-cfo-agent-local-only}
+      Finance__DemoDate: ${FINANCE_DEMO_DATE:-2026-07-15}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: "no"
+
+  finance-mcp:
+    image: cfo-agent-finance-mcp:local
+    build:
+      context: .
+      dockerfile: tools/CfoAgent.FinanceMcpServer/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__FinanceDatabase: Host=postgres;Port=5432;Database=${POSTGRES_DB:-cfo_agent};Username=${POSTGRES_USER:-cfo_agent};Password=${POSTGRES_PASSWORD:-cfo-agent-local-only}
+      Finance__DemoDate: ${FINANCE_DEMO_DATE:-2026-07-15}
+    depends_on:
+      finance-db-init:
+        condition: service_completed_successfully
+    expose:
+      - "8080"
+    networks:
+      - backend
+    restart: unless-stopped
+
+  knowledge-mcp:
+    image: cfo-agent-knowledge-mcp:local
+    build:
+      context: .
+      dockerfile: tools/CfoAgent.KnowledgeFileMcpServer/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      KnowledgeFiles__RootPath: /knowledge
+    volumes:
+      - type: bind
+        source: ./data/knowledge
+        target: /knowledge
+        read_only: true
+    expose:
+      - "8080"
+    networks:
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+
   chromadb:
     image: chromadb/chroma:latest
-    ports:
-      - "8000:8000"
     volumes:
-      - chroma_data:/chroma/chroma
+      - chroma_data:/data
+    expose:
+      - "8000"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/8000'"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  rag-init:
+    image: cfo-agent-api:local
+    build:
+      context: .
+      dockerfile: src/CfoAgent.Api/Dockerfile
+    command: ["--ingest-rag"]
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      AI__Provider: Mock
+      AI__Model: DeterministicMock
+      Chroma__BaseUrl: http://chromadb:8000
+      Rag__KnowledgeFilesRoot: /knowledge
+      Mcp__Finance__Enabled: "false"
+      Mcp__KnowledgeFiles__Enabled: "false"
+      Mcp__KnowledgeFiles__UseLocalFallback: "false"
+    volumes:
+      - type: bind
+        source: ./data/knowledge
+        target: /knowledge
+        read_only: true
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: "no"
+
+  api:
+    image: cfo-agent-api:local
+    build:
+      context: .
+      dockerfile: src/CfoAgent.Api/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      AI__Provider: ${AI_PROVIDER:-Mock}
+      AI__Model: ${AI_MODEL:-DeterministicMock}
+      AI__BaseUrl: http://host.docker.internal:11434
+      Chroma__BaseUrl: http://chromadb:8000
+      Mcp__Finance__Enabled: "true"
+      Mcp__Finance__BaseUrl: http://finance-mcp:8080
+      Mcp__KnowledgeFiles__Enabled: "true"
+      Mcp__KnowledgeFiles__BaseUrl: http://knowledge-mcp:8080
+      Mcp__KnowledgeFiles__UseLocalFallback: "false"
+      Frontend__AllowedOrigin: ${FRONTEND_ORIGIN:-http://localhost:5173}
+    ports:
+      - "${CFO_API_PORT:-5260}:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      finance-mcp:
+        condition: service_healthy
+      knowledge-mcp:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+      rag-init:
+        condition: service_completed_successfully
+    networks:
+      - backend
+      - edge
+    restart: unless-stopped
+
+  frontend:
+    image: cfo-agent-ui:local
+    build:
+      context: ./src/cfo-agent-ui
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ""
+    ports:
+      - "${CFO_UI_PORT:-5173}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - edge
+    restart: unless-stopped
+
+networks:
+  backend:
+    internal: true
+  edge:
 
 volumes:
+  postgres_data:
   chroma_data:
