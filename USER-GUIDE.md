@@ -179,12 +179,12 @@ docker compose logs --no-color finance-mcp
 docker compose logs --no-color knowledge-mcp
 ```
 
-In the API log, look for successful Finance MCP discovery with five tools and Knowledge File MCP discovery with two read-only tools. The approved tools are:
+In the API log, look for successful Finance MCP discovery with five approved tools and Knowledge File MCP discovery with two approved read-only tools. The generic adapter performs the SDK handshake, calls `tools/list`, and caches only configured approved tool metadata for the live connection. The approved tools are:
 
 - Finance MCP: `get_sales_summary`, `compare_sales_periods`, `get_top_products`, `get_historical_sales`, and `get_budget_target`.
 - Knowledge File MCP: `list_knowledge_files` and `read_knowledge_file`.
 
-The knowledge directory is mounted read-only inside `knowledge-mcp`. It rejects traversal, absolute paths, writes, execution, and access outside the approved root.
+The knowledge directory is mounted read-only inside `knowledge-mcp`. It rejects traversal, absolute paths, writes, execution, and access outside the approved root. Finance tool selection is bounded to the relevant approved operation and canonical C# arguments; neither Mock nor Ollama can choose arbitrary MCP servers/tools or calculate finance values. Knowledge file operations do not replace ChromaDB semantic retrieval and citations.
 
 ## 8. Use the application
 
@@ -274,7 +274,7 @@ $env:AI__Model = 'llama3.2:3b'
 $env:AI__BaseUrl = 'http://localhost:11434'
 ```
 
-For Docker Compose, set `AI_PROVIDER=Ollama` and `AI_MODEL=llama3.2:3b` in `.env`, then run `docker compose up -d --force-recreate api`. Containers reach host Ollama through `host.docker.internal`. Ollama is never asked to calculate financial values, select MCP tools, or replace ChromaDB retrieval.
+For Docker Compose, set `AI_PROVIDER=Ollama` and `AI_MODEL=llama3.2:3b` in `.env`, then run `docker compose up -d --force-recreate api`. Containers reach host Ollama through `host.docker.internal`. Ollama is never asked to calculate financial values or replace ChromaDB retrieval. When the application supplies a bounded approved MCP tool set for a Finance operation, Ollama may return one function call from that set; the API still validates the selected tool and canonical deterministic arguments before invocation.
 
 ## 12. Stop or reset the application
 
@@ -310,4 +310,4 @@ Use `down -v` only when you really want a clean data reset. The next `docker com
 | Port is already in use | Set `CFO_UI_PORT` or `CFO_API_PORT` before starting Compose, for example `$env:CFO_UI_PORT = '5180'`. |
 | Docker cannot start | Confirm Docker Desktop is running with `docker version` and `docker info`. |
 
-For architecture detail and final test results, see [README.md](README.md), [APPLICATION_ARCHITECTURE.md](APPLICATION_ARCHITECTURE.md), and [docs/PHASE-8-RESULTS.md](docs/PHASE-8-RESULTS.md).
+For architecture detail and final test results, see [APPLICATION_ARCHITECTURE.md](APPLICATION_ARCHITECTURE.md), [docs/PHASE-8-RESULTS.md](docs/PHASE-8-RESULTS.md), and [docs/MCP-INTEGRATION-REFACTOR-RESULTS.md](docs/MCP-INTEGRATION-REFACTOR-RESULTS.md).

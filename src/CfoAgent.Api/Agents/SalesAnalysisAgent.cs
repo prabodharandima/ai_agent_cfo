@@ -16,7 +16,7 @@ public sealed class SalesAnalysisAgent(
 
         try
         {
-            var summary = await financeMcpClient.GetCurrentWeekSummaryAsync(cancellationToken);
+            var summary = await financeMcpClient.GetCurrentWeekSummaryAsync(request.Message, cancellationToken);
             var answer = await GetAnswerAsync(AgentPromptTemplates.ForSalesSummary(summary), cancellationToken);
 
             return new AgentResult(
@@ -49,7 +49,7 @@ public sealed class SalesAnalysisAgent(
 
         try
         {
-            var comparison = await financeMcpClient.GetWeekOverWeekComparisonAsync(cancellationToken);
+            var comparison = await financeMcpClient.GetWeekOverWeekComparisonAsync(request.Message, cancellationToken);
             var answer = await GetAnswerAsync(AgentPromptTemplates.ForSalesComparison(comparison), cancellationToken);
             var warnings = comparison.CurrentWeek.Warnings
                 .Concat(comparison.PreviousWeek.Warnings)
@@ -87,7 +87,7 @@ public sealed class SalesAnalysisAgent(
 
         try
         {
-            var topProducts = await financeMcpClient.GetCurrentMonthTopProductsAsync(cancellationToken);
+            var topProducts = await financeMcpClient.GetCurrentMonthTopProductsAsync(request.Message, cancellationToken);
             var answer = await GetAnswerAsync(AgentPromptTemplates.ForTopProducts(topProducts), cancellationToken);
 
             return new AgentResult(

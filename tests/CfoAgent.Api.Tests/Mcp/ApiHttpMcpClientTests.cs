@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using CfoAgent.Api.Agents.Configuration;
+using CfoAgent.Api.AI.Mock;
 using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Tests.Finance;
@@ -25,10 +27,15 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
         {
             BaseAddress = new Uri("http://finance-mcp.test")
         });
-        await using var client = CreateFinanceClient(httpClient);
+        await using var adapter = CreateFinanceAdapter(httpClient);
+        var client = CreateFinanceClient(adapter);
 
         var tools = await client.DiscoverToolsAsync(CancellationToken.None);
         var summary = await client.GetCurrentWeekSummaryAsync(CancellationToken.None);
+        var comparison = await client.GetWeekOverWeekComparisonAsync("Compare this week versus last week.", CancellationToken.None);
+        var topProducts = await client.GetCurrentMonthTopProductsAsync("Show the top products this month.", CancellationToken.None);
+        var historical = await client.GetHistoricalYearlyTotalsAsync("Forecast sales from historical totals.", CancellationToken.None);
+        var budget = await client.GetBudgetTargetAsync(2026, null, CancellationToken.None);
 
         Assert.Equal(
             ["compare_sales_periods", "get_budget_target", "get_historical_sales", "get_sales_summary", "get_top_products"],
@@ -36,6 +43,10 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
         Assert.Equal(new DateOnly(2026, 7, 13), summary.Period.StartDate);
         Assert.Equal(new DateOnly(2026, 7, 15), summary.Period.EndDate);
         Assert.True(summary.NetRevenue > 0m);
+        Assert.Equal(new DateOnly(2026, 7, 13), comparison.CurrentWeek.Period.StartDate);
+        Assert.NotEmpty(topProducts.Products);
+        Assert.Equal([2021, 2022, 2023, 2024, 2025], historical.Totals.Select(total => total.Year));
+        Assert.True(budget.IsAvailable);
     }
 
     [Fact]
@@ -49,7 +60,8 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
             {
                 BaseAddress = new Uri("http://knowledge-mcp.test")
             });
-            await using var client = CreateFinanceClient(httpClient);
+            await using var adapter = CreateFinanceAdapter(httpClient);
+            var client = CreateFinanceClient(adapter);
 
             var exception = await Assert.ThrowsAsync<McpDependencyException>(() =>
                 client.DiscoverToolsAsync(CancellationToken.None));
@@ -74,7 +86,8 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
             {
                 BaseAddress = new Uri("http://knowledge-mcp.test")
             });
-            await using var client = CreateKnowledgeClient(httpClient);
+            await using var adapter = CreateKnowledgeAdapter(httpClient);
+            var client = new KnowledgeFileMcpHttpClient(adapter);
 
             var tools = await client.DiscoverToolsAsync(CancellationToken.None);
             var files = await client.ListFilesAsync(CancellationToken.None);
@@ -96,7 +109,8 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
     {
         var handler = new CountingHandler();
         using var httpClient = new HttpClient(handler);
-        await using var client = CreateFinanceClient(httpClient, enabled: false);
+        await using var adapter = CreateFinanceAdapter(httpClient, enabled: false);
+        var client = CreateFinanceClient(adapter);
 
         var exception = await Assert.ThrowsAsync<McpDependencyException>(() =>
             client.GetCurrentWeekSummaryAsync(CancellationToken.None));
@@ -111,7 +125,7 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
         var handler = new CountingHandler();
         using var httpClient = new HttpClient(handler);
 
-        await using var finance = CreateFinanceClient(httpClient);
+        await using var adapter = CreateFinanceAdapter(httpClient);
 
         Assert.Equal(0, handler.RequestCount);
     }
@@ -120,15 +134,15 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
     public void ApiMcpConfigurationAndClientsContainNoChildProcessContract()
     {
         Assert.Null(typeof(FinanceMcpOptions).GetProperty("ServerProjectPath"));
-        Assert.DoesNotContain(typeof(IHostEnvironment), typeof(FinanceMcpClient).GetConstructors().Single().GetParameters().Select(parameter => parameter.ParameterType));
-        Assert.DoesNotContain(typeof(IHostEnvironment), typeof(KnowledgeFileMcpHttpClient).GetConstructors().Single().GetParameters().Select(parameter => parameter.ParameterType));
+        Assert.DoesNotContain(typeof(IHostEnvironment), typeof(McpToolAdapter).GetConstructors().Single().GetParameters().Select(parameter => parameter.ParameterType));
     }
 
     [Fact]
     public async Task UnavailableFinanceEndpointProducesSanitizedDependencyFailure()
     {
         using var httpClient = new HttpClient(new ThrowingHandler());
-        await using var client = CreateFinanceClient(httpClient);
+        await using var adapter = CreateFinanceAdapter(httpClient);
+        var client = CreateFinanceClient(adapter);
 
         var exception = await Assert.ThrowsAsync<McpDependencyException>(() =>
             client.GetCurrentWeekSummaryAsync(CancellationToken.None));
@@ -141,7 +155,8 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
     public async Task FinanceTimeoutProducesTimeoutDependencyFailure()
     {
         using var httpClient = new HttpClient(new DelayingHandler());
-        await using var client = CreateFinanceClient(httpClient, timeoutSeconds: 1);
+        await using var adapter = CreateFinanceAdapter(httpClient, timeoutSeconds: 1);
+        var client = CreateFinanceClient(adapter);
 
         var exception = await Assert.ThrowsAsync<McpDependencyException>(() =>
             client.GetCurrentWeekSummaryAsync(CancellationToken.None));
@@ -153,7 +168,8 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
     public async Task CallerCancellationPropagatesWithoutDependencyConversion()
     {
         using var httpClient = new HttpClient(new DelayingHandler());
-        await using var client = CreateFinanceClient(httpClient, timeoutSeconds: 10);
+        await using var adapter = CreateFinanceAdapter(httpClient, timeoutSeconds: 10);
+        var client = CreateFinanceClient(adapter);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 
@@ -161,32 +177,39 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
             client.GetCurrentWeekSummaryAsync(cancellation.Token));
     }
 
-    private static FinanceMcpClient CreateFinanceClient(
+    private static McpToolAdapter CreateFinanceAdapter(
         HttpClient httpClient,
         bool enabled = true,
         int timeoutSeconds = 5) => new(
-            Options.Create(new McpOptions
-            {
-                Finance = new FinanceMcpOptions
-                {
-                    Enabled = enabled,
-                    BaseUrl = "http://finance-mcp.test",
-                    TimeoutSeconds = timeoutSeconds
-                },
-                KnowledgeFiles = CreateKnowledgeOptions()
-            }),
+            "Finance MCP",
+            McpToolAdapter.FinanceHttpClientName,
+            enabled,
+            "http://finance-mcp.test",
+            timeoutSeconds,
+            ["get_sales_summary", "compare_sales_periods", "get_top_products", "get_historical_sales", "get_budget_target"],
             new SingleHttpClientFactory(httpClient),
-            new FixedTimeProvider(new DateOnly(2026, 7, 15)),
-            NullLogger<FinanceMcpClient>.Instance);
+            NullLogger<McpToolAdapter>.Instance);
 
-    private static KnowledgeFileMcpHttpClient CreateKnowledgeClient(HttpClient httpClient) => new(
-        Options.Create(new McpOptions
-        {
-            Finance = new FinanceMcpOptions { TimeoutSeconds = 5 },
-            KnowledgeFiles = CreateKnowledgeOptions(enabled: true)
-        }),
+    private static FinanceMcpClient CreateFinanceClient(IMcpToolAdapter adapter) => new(
+        adapter,
+        CreateAgentFramework(),
+        new FixedTimeProvider(new DateOnly(2026, 7, 15)),
+        NullLogger<FinanceMcpClient>.Instance);
+
+    private static McpToolAdapter CreateKnowledgeAdapter(HttpClient httpClient) => new(
+        "Knowledge File MCP",
+        McpToolAdapter.KnowledgeFilesHttpClientName,
+        true,
+        "http://knowledge-mcp.test",
+        5,
+        ["list_knowledge_files", "read_knowledge_file"],
         new SingleHttpClientFactory(httpClient),
-        NullLogger<KnowledgeFileMcpHttpClient>.Instance);
+        NullLogger<McpToolAdapter>.Instance);
+
+    private static CfoAgentFramework CreateAgentFramework() => new(
+        new MockChatClient(Options.Create(new AiOptions())),
+        NullLoggerFactory.Instance,
+        new EmptyServiceProvider());
 
     private static KnowledgeFileMcpOptions CreateKnowledgeOptions(bool enabled = false) => new()
     {
@@ -206,6 +229,11 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
     private sealed class SingleHttpClientFactory(HttpClient client) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => client;
+    }
+
+    private sealed class EmptyServiceProvider : IServiceProvider
+    {
+        public object? GetService(Type serviceType) => null;
     }
 
     private sealed class CountingHandler : HttpMessageHandler

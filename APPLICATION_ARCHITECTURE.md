@@ -35,7 +35,9 @@ The API has no PostgreSQL connection string, finance EF Core persistence, financ
 
 ## MCP transport and security
 
-Both MCP services use the official C# SDK Streamable HTTP endpoint at `/mcp` over the internal Docker `backend` network. Tool names are fixed by application code; neither the orchestrator nor an LLM chooses arbitrary endpoints or tool names.
+Both MCP services use the official C# SDK Streamable HTTP endpoint at `/mcp` over the internal Docker `backend` network. `McpToolAdapter` creates the SDK client lazily, lets it initialize, calls `tools/list`, filters the result using configured `AllowedToolNames`, and caches only approved tool metadata for the live connection. On a transport or tool failure it disposes the client and cache; the next request reconnects and rediscovers tools.
+
+The API never exposes arbitrary endpoints or all server tools. For Finance operations, the current approved candidate set is supplied to the configured `IChatClient`, which can choose one tool only within that bounded set. `CfoAgentFramework` verifies the returned function name and requires arguments to exactly match deterministic C# canonical values before `McpToolAdapter` invokes `tools/call`. The CFO Orchestrator still routes business intents to specialist agents; it does not select MCP tools. Knowledge list/read use the same adapter but raw file access remains outside LLM answer selection so ChromaDB stays responsible for semantic retrieval and citations.
 
 Finance MCP exposes only `get_sales_summary`, `compare_sales_periods`, `get_top_products`, `get_historical_sales`, and `get_budget_target`. Knowledge File MCP exposes only `list_knowledge_files` and `read_knowledge_file`. The knowledge root is a read-only bind mount, traversal and absolute paths are rejected, and the Knowledge container has a read-only root filesystem.
 
@@ -69,7 +71,7 @@ sequenceDiagram
 
 ## AI, calculations, and RAG
 
-`MockChatClient` is the offline default `IChatClient`; optional Ollama remains configuration-selected and is contacted by containers through `host.docker.internal`. Neither provider calculates finance values. Finance MCP returns deterministic historical totals; `SalesForecastingService` performs forecast arithmetic in C#. ChromaDB stores deterministic token-hash embeddings and Markdown citation metadata only, never finance transactions.
+`MockChatClient` is the offline default `IChatClient`; optional Ollama remains configuration-selected and is contacted by containers through `host.docker.internal`. Both providers may return a bounded approved MCP function call when one is supplied for the current operation, but neither calculates finance values or controls canonical finance arguments. Finance MCP returns deterministic historical totals; `SalesForecastingService` performs forecast arithmetic in C#. ChromaDB stores deterministic token-hash embeddings and Markdown citation metadata only, never finance transactions.
 
 ## Health and tests
 

@@ -64,8 +64,10 @@ builder.Services.AddOptions<McpOptions>()
     .BindConfiguration(McpOptions.SectionName)
     .Validate(options => options.Finance.TimeoutSeconds > 0, "Mcp:Finance:TimeoutSeconds must be greater than zero.")
     .Validate(options => !options.Finance.Enabled || IsAbsoluteHttpUri(options.Finance.BaseUrl), "Mcp:Finance:BaseUrl must be an absolute HTTP or HTTPS URI when Finance MCP is enabled.")
+    .Validate(options => !options.Finance.Enabled || HasValidAllowedTools(options.Finance.AllowedToolNames), "Mcp:Finance:AllowedToolNames must contain unique nonblank tool names when Finance MCP is enabled.")
     .Validate(options => options.KnowledgeFiles.TimeoutSeconds > 0, "Mcp:KnowledgeFiles:TimeoutSeconds must be greater than zero.")
     .Validate(options => !options.KnowledgeFiles.Enabled || IsAbsoluteHttpUri(options.KnowledgeFiles.BaseUrl), "Mcp:KnowledgeFiles:BaseUrl must be an absolute HTTP or HTTPS URI when Knowledge File MCP is enabled.")
+    .Validate(options => !options.KnowledgeFiles.Enabled || HasValidAllowedTools(options.KnowledgeFiles.AllowedToolNames), "Mcp:KnowledgeFiles:AllowedToolNames must contain unique nonblank tool names when Knowledge File MCP is enabled.")
     .Validate(options => !options.KnowledgeFiles.UseLocalFallback || !string.IsNullOrWhiteSpace(options.KnowledgeFiles.RootPath), "Mcp:KnowledgeFiles:RootPath is required when local fallback is enabled.")
     .Validate(options => !options.KnowledgeFiles.UseLocalFallback || builder.Environment.IsDevelopment(), "Knowledge File MCP local fallback is permitted only in Development.")
     .ValidateOnStart();
@@ -114,8 +116,34 @@ builder.Services.AddSingleton<CfoAgentFramework>();
 builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>, DeterministicTokenHashEmbeddingGenerator>();
 builder.Services.AddScoped<RagDocumentIngestionService>();
 builder.Services.AddScoped<FinancialKnowledgeRetrievalService>();
-builder.Services.AddHttpClient(FinanceMcpClient.HttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);
-builder.Services.AddHttpClient(KnowledgeFileMcpHttpClient.HttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddHttpClient(McpToolAdapter.FinanceHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddHttpClient(McpToolAdapter.KnowledgeFilesHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);
+builder.Services.AddKeyedSingleton<IMcpToolAdapter>(McpToolAdapter.FinanceKey, (serviceProvider, _) =>
+{
+    var finance = serviceProvider.GetRequiredService<IOptions<McpOptions>>().Value.Finance;
+    return new McpToolAdapter(
+        "Finance MCP",
+        McpToolAdapter.FinanceHttpClientName,
+        finance.Enabled,
+        finance.BaseUrl,
+        finance.TimeoutSeconds,
+        finance.AllowedToolNames,
+        serviceProvider.GetRequiredService<IHttpClientFactory>(),
+        serviceProvider.GetRequiredService<ILogger<McpToolAdapter>>());
+});
+builder.Services.AddKeyedSingleton<IMcpToolAdapter>(McpToolAdapter.KnowledgeFilesKey, (serviceProvider, _) =>
+{
+    var knowledge = serviceProvider.GetRequiredService<IOptions<McpOptions>>().Value.KnowledgeFiles;
+    return new McpToolAdapter(
+        "Knowledge File MCP",
+        McpToolAdapter.KnowledgeFilesHttpClientName,
+        knowledge.Enabled,
+        knowledge.BaseUrl,
+        knowledge.TimeoutSeconds,
+        knowledge.AllowedToolNames,
+        serviceProvider.GetRequiredService<IHttpClientFactory>(),
+        serviceProvider.GetRequiredService<ILogger<McpToolAdapter>>());
+});
 builder.Services.AddSingleton<FinanceMcpClient>();
 builder.Services.AddSingleton<IFinanceMcpClient>(serviceProvider => serviceProvider.GetRequiredService<FinanceMcpClient>());
 builder.Services.AddSingleton<IFinanceMcpRemoteClient>(serviceProvider => serviceProvider.GetRequiredService<FinanceMcpClient>());
@@ -255,5 +283,10 @@ static bool IsAbsoluteHttpUri(string value) =>
     Uri.TryCreate(value, UriKind.Absolute, out var uri)
     && (string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
         || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase));
+
+static bool HasValidAllowedTools(IReadOnlyList<string> names) =>
+    names.Count > 0
+    && names.All(name => !string.IsNullOrWhiteSpace(name))
+    && names.Distinct(StringComparer.Ordinal).Count() == names.Count;
 
 public partial class Program;

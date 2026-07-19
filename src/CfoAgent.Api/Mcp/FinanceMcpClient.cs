@@ -1,31 +1,33 @@
 using System.Globalization;
 using System.Text.Json;
-using CfoAgent.Api.Configuration;
+using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Features.Sales;
-using Microsoft.Extensions.Options;
-using ModelContextProtocol.Client;
-using ModelContextProtocol.Protocol;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace CfoAgent.Api.Mcp;
 
 public sealed class FinanceMcpClient(
-    IOptions<McpOptions> options,
-    IHttpClientFactory httpClientFactory,
+    [FromKeyedServices(McpToolAdapter.FinanceKey)] IMcpToolAdapter toolAdapter,
+    CfoAgentFramework agentFramework,
     TimeProvider timeProvider,
-    ILogger<FinanceMcpClient> logger) : IFinanceMcpRemoteClient, IAsyncDisposable
+    ILogger<FinanceMcpClient> logger) : IFinanceMcpRemoteClient
 {
-    public const string HttpClientName = "FinanceMcp";
     private const string DependencyName = "Finance MCP";
-    private static readonly string[] RequiredTools = ["get_sales_summary", "compare_sales_periods", "get_top_products", "get_historical_sales", "get_budget_target"];
+    private static readonly string[] SalesTools = ["get_sales_summary", "compare_sales_periods", "get_top_products"];
+    private static readonly string[] HistoricalTools = ["get_historical_sales"];
+    private static readonly string[] BudgetTools = ["get_budget_target"];
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private readonly SemaphoreSlim gate = new(1, 1);
-    private McpClient? client;
 
-    public async Task<SalesSummary> GetCurrentWeekSummaryAsync(CancellationToken cancellationToken)
+    public Task<SalesSummary> GetCurrentWeekSummaryAsync(CancellationToken cancellationToken) =>
+        GetCurrentWeekSummaryAsync("Give me the current week sales summary.", cancellationToken);
+
+    public async Task<SalesSummary> GetCurrentWeekSummaryAsync(string userMessage, CancellationToken cancellationToken)
     {
         var currentDate = GetCurrentDate();
-        var result = await CallToolAsync<McpSalesSummary>(
+        var result = await SelectAndCallAsync<McpSalesSummary>(
             "get_sales_summary",
+            SalesTools,
+            userMessage,
             new Dictionary<string, object?>
             {
                 ["startDate"] = FormatDate(StartOfWeek(currentDate)),
@@ -36,12 +38,17 @@ public sealed class FinanceMcpClient(
         return ToSalesSummary(result);
     }
 
-    public async Task<WeeklySalesComparison> GetWeekOverWeekComparisonAsync(CancellationToken cancellationToken)
+    public Task<WeeklySalesComparison> GetWeekOverWeekComparisonAsync(CancellationToken cancellationToken) =>
+        GetWeekOverWeekComparisonAsync("Compare this week's sales with last week.", cancellationToken);
+
+    public async Task<WeeklySalesComparison> GetWeekOverWeekComparisonAsync(string userMessage, CancellationToken cancellationToken)
     {
         var currentDate = GetCurrentDate();
         var currentStart = StartOfWeek(currentDate);
-        var result = await CallToolAsync<McpPeriodComparison>(
+        var result = await SelectAndCallAsync<McpPeriodComparison>(
             "compare_sales_periods",
+            SalesTools,
+            userMessage,
             new Dictionary<string, object?>
             {
                 ["currentStartDate"] = FormatDate(currentStart),
@@ -60,11 +67,16 @@ public sealed class FinanceMcpClient(
             result.Warnings);
     }
 
-    public async Task<TopProductsResult> GetCurrentMonthTopProductsAsync(CancellationToken cancellationToken)
+    public Task<TopProductsResult> GetCurrentMonthTopProductsAsync(CancellationToken cancellationToken) =>
+        GetCurrentMonthTopProductsAsync("Show me the top products this month.", cancellationToken);
+
+    public async Task<TopProductsResult> GetCurrentMonthTopProductsAsync(string userMessage, CancellationToken cancellationToken)
     {
         var currentDate = GetCurrentDate();
-        var result = await CallToolAsync<McpTopProducts>(
+        var result = await SelectAndCallAsync<McpTopProducts>(
             "get_top_products",
+            SalesTools,
+            userMessage,
             new Dictionary<string, object?>
             {
                 ["startDate"] = FormatDate(new DateOnly(currentDate.Year, currentDate.Month, 1)),
@@ -76,11 +88,16 @@ public sealed class FinanceMcpClient(
         return new TopProductsResult(ToSalesPeriod(result.Period), result.Products.Select(ToTopProduct).ToArray(), result.Warnings);
     }
 
-    public async Task<HistoricalYearlySalesResult> GetHistoricalYearlyTotalsAsync(CancellationToken cancellationToken)
+    public Task<HistoricalYearlySalesResult> GetHistoricalYearlyTotalsAsync(CancellationToken cancellationToken) =>
+        GetHistoricalYearlyTotalsAsync("Retrieve historical yearly sales for forecasting.", cancellationToken);
+
+    public async Task<HistoricalYearlySalesResult> GetHistoricalYearlyTotalsAsync(string userMessage, CancellationToken cancellationToken)
     {
         var endYear = GetCurrentDate().Year - 1;
-        var result = await CallToolAsync<McpHistoricalSales>(
+        var result = await SelectAndCallAsync<McpHistoricalSales>(
             "get_historical_sales",
+            HistoricalTools,
+            userMessage,
             new Dictionary<string, object?>
             {
                 ["startYear"] = endYear - 4,
@@ -95,8 +112,10 @@ public sealed class FinanceMcpClient(
 
     public async Task<BudgetTargetResult> GetBudgetTargetAsync(int year, int? month, CancellationToken cancellationToken)
     {
-        var result = await CallToolAsync<McpBudgetTarget>(
+        var result = await SelectAndCallAsync<McpBudgetTarget>(
             "get_budget_target",
+            BudgetTools,
+            "Retrieve the configured budget target.",
             new Dictionary<string, object?> { ["year"] = year, ["month"] = month },
             cancellationToken);
         return new BudgetTargetResult(
@@ -109,151 +128,48 @@ public sealed class FinanceMcpClient(
             result.Warnings);
     }
 
-    public Task<IReadOnlyList<string>> DiscoverToolsAsync(CancellationToken cancellationToken)
-    {
-        EnsureEnabled();
-        return ExecuteDependencyOperationAsync(async token =>
-        {
-            var connectedClient = await GetClientAsync(token);
-            var names = (await connectedClient.ListToolsAsync(cancellationToken: token))
-                .Select(tool => tool.Name)
-                .OrderBy(name => name, StringComparer.Ordinal)
-                .ToArray();
-            var missing = RequiredTools.Except(names, StringComparer.Ordinal).Any();
-            var unexpected = names.Except(RequiredTools, StringComparer.Ordinal).Any();
-            if (missing || unexpected)
-            {
-                throw new McpDependencyException(DependencyName, McpDependencyFailureKind.CapabilityMismatch);
-            }
+    public async Task<IReadOnlyList<string>> DiscoverToolsAsync(CancellationToken cancellationToken) =>
+        (await toolAdapter.GetApprovedToolsAsync(null, cancellationToken))
+            .Select(tool => tool.Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
 
-            logger.LogInformation("Finance MCP capability discovery succeeded with {ToolCount} tools.", names.Length);
-            return (IReadOnlyList<string>)names;
-        }, cancellationToken);
-    }
-
-    private async Task<T> CallToolAsync<T>(
-        string toolName,
+    private async Task<T> SelectAndCallAsync<T>(
+        string expectedToolName,
+        IReadOnlyList<string> candidateToolNames,
+        string userMessage,
         IReadOnlyDictionary<string, object?> arguments,
         CancellationToken cancellationToken)
     {
-        await DiscoverToolsAsync(cancellationToken);
-        return await ExecuteDependencyOperationAsync(async token =>
+        var approvedTools = await toolAdapter.GetApprovedToolsAsync(candidateToolNames, cancellationToken);
+        var selected = await agentFramework.SelectMcpToolAsync(
+            DependencyName,
+            userMessage,
+            approvedTools,
+            arguments,
+            cancellationToken);
+        if (!string.Equals(selected.Name, expectedToolName, StringComparison.Ordinal))
         {
-            var connectedClient = await GetClientAsync(token);
-            var result = await connectedClient.CallToolAsync(toolName, arguments, cancellationToken: token);
-            if (result.IsError == true)
-            {
-                throw new McpDependencyException(DependencyName, McpDependencyFailureKind.InvalidResponse);
-            }
-
-            var content = result.Content.OfType<TextContentBlock>().SingleOrDefault()?.Text;
-            if (string.IsNullOrWhiteSpace(content))
-            {
-                throw new McpDependencyException(DependencyName, McpDependencyFailureKind.InvalidResponse);
-            }
-
-            FinanceMcpResponse<T>? response;
-            try
-            {
-                response = JsonSerializer.Deserialize<FinanceMcpResponse<T>>(content, JsonOptions);
-            }
-            catch (JsonException exception)
-            {
-                throw new McpDependencyException(DependencyName, McpDependencyFailureKind.InvalidResponse, exception);
-            }
-
-            if (response is null || !response.IsSuccess || response.Data is null)
-            {
-                throw new McpDependencyException(DependencyName, McpDependencyFailureKind.InvalidResponse);
-            }
-
-            logger.LogInformation("Finance MCP tool {ToolName} completed successfully.", toolName);
-            return response.Data;
-        }, cancellationToken);
-    }
-
-    private async Task<McpClient> GetClientAsync(CancellationToken cancellationToken)
-    {
-        if (client is not null)
-        {
-            return client;
+            throw new McpDependencyException(DependencyName, McpDependencyFailureKind.CapabilityMismatch);
         }
 
-        await gate.WaitAsync(cancellationToken);
+        var data = await toolAdapter.CallApprovedToolAsync(selected.Name, arguments, cancellationToken);
         try
         {
-            if (client is not null)
+            var result = data.Deserialize<T>(JsonOptions);
+            if (result is null)
             {
-                return client;
+                throw new McpDependencyException(DependencyName, McpDependencyFailureKind.InvalidResponse);
             }
 
-            var httpClient = httpClientFactory.CreateClient(HttpClientName);
-            var transport = new HttpClientTransport(
-                new HttpClientTransportOptions
-                {
-                    Endpoint = CreateMcpEndpoint(options.Value.Finance.BaseUrl),
-                    TransportMode = HttpTransportMode.StreamableHttp,
-                    ConnectionTimeout = TimeSpan.FromSeconds(options.Value.Finance.TimeoutSeconds)
-                },
-                httpClient,
-                ownsHttpClient: true);
-            try
-            {
-                client = await McpClient.CreateAsync(transport, cancellationToken: cancellationToken);
-            }
-            catch
-            {
-                await transport.DisposeAsync();
-                throw;
-            }
-
-            logger.LogInformation("Connected to Finance MCP over Streamable HTTP.");
-            return client;
+            logger.LogInformation("Finance MCP selected tool {ToolName} mapped to the existing finance result contract.", selected.Name);
+            return result;
         }
-        finally
+        catch (JsonException exception)
         {
-            gate.Release();
+            throw new McpDependencyException(DependencyName, McpDependencyFailureKind.InvalidResponse, exception);
         }
     }
-
-    private async Task<T> ExecuteDependencyOperationAsync<T>(
-        Func<CancellationToken, Task<T>> operation,
-        CancellationToken cancellationToken)
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(options.Value.Finance.TimeoutSeconds));
-        try
-        {
-            return await operation(timeout.Token);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (OperationCanceledException exception)
-        {
-            throw new McpDependencyException(DependencyName, McpDependencyFailureKind.Timeout, exception);
-        }
-        catch (McpDependencyException)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            throw new McpDependencyException(DependencyName, McpDependencyFailureKind.Unavailable, exception);
-        }
-    }
-
-    private void EnsureEnabled()
-    {
-        if (!options.Value.Finance.Enabled)
-        {
-            throw new McpDependencyException(DependencyName, McpDependencyFailureKind.Disabled);
-        }
-    }
-
-    internal static Uri CreateMcpEndpoint(string baseUrl) =>
-        new($"{baseUrl.TrimEnd('/')}/mcp", UriKind.Absolute);
 
     private DateOnly GetCurrentDate() => DateOnly.FromDateTime(timeProvider.GetLocalNow().DateTime);
 
@@ -292,26 +208,6 @@ public sealed class FinanceMcpClient(
         _ => throw new McpDependencyException(DependencyName, McpDependencyFailureKind.InvalidResponse)
     };
 
-    public async ValueTask DisposeAsync()
-    {
-        await gate.WaitAsync();
-        try
-        {
-            if (client is not null)
-            {
-                await client.DisposeAsync();
-            }
-
-            client = null;
-        }
-        finally
-        {
-            gate.Release();
-            gate.Dispose();
-        }
-    }
-
-    private sealed record FinanceMcpResponse<T>(bool IsSuccess, T? Data, string? Error);
     private sealed record McpSalesPeriod(string StartDate, string EndDate);
     private sealed record McpTopProduct(string ProductCode, string ProductName, decimal QuantitySold, decimal NetRevenue, decimal GrossProfit);
     private sealed record McpSalesSummary(McpSalesPeriod Period, decimal NetRevenue, decimal CostOfGoodsSold, decimal GrossProfit, decimal GrossMarginPercent, decimal QuantitySold, int OrderCount, decimal AverageOrderValue, McpTopProduct? TopProduct, IReadOnlyList<string> Warnings);

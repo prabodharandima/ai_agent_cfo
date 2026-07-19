@@ -21,7 +21,7 @@ public sealed class ForecastingAgent(
 
         try
         {
-            var forecast = await GetForecastAsync(cancellationToken);
+            var forecast = await GetForecastAsync(request.Message, cancellationToken);
             var agent = agentFramework.CreateAgent(AgentDefinitions.Forecasting);
             var session = await agent.CreateSessionAsync(cancellationToken);
             var response = await agent.RunAsync(AgentPromptTemplates.ForForecast(forecast), session, options: null, cancellationToken);
@@ -50,9 +50,9 @@ public sealed class ForecastingAgent(
         }
     }
 
-    private async Task<SalesForecastResult> GetForecastAsync(CancellationToken cancellationToken)
+    private async Task<SalesForecastResult> GetForecastAsync(string userMessage, CancellationToken cancellationToken)
     {
-        var historical = await financeMcpClient.GetHistoricalYearlyTotalsAsync(cancellationToken);
+        var historical = await financeMcpClient.GetHistoricalYearlyTotalsAsync(userMessage, cancellationToken);
         return salesForecastingService.Forecast(historical);
     }
 

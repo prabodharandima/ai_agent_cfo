@@ -34,6 +34,45 @@ public sealed class OllamaChatClientTests
     }
 
     [Fact]
+    public async Task GetResponseAsync_ForwardsExplicitlyApprovedTools()
+    {
+        var handler = new RecordingHandler(_ => JsonResponse(CreateChatResponse("Tool selection received.")));
+        using var fixture = CreateClient(handler);
+        var tool = AIFunctionFactory.Create(
+            (string relativePath) => relativePath,
+            "read_knowledge_file",
+            "Read one approved knowledge file.");
+
+        await fixture.Client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "Select a supplied tool.")],
+            new ChatOptions { Tools = [tool], ToolMode = ChatToolMode.RequireAny });
+
+        Assert.NotNull(handler.RequestBody);
+        using var request = JsonDocument.Parse(handler.RequestBody);
+        var serializedTool = Assert.Single(request.RootElement.GetProperty("tools").EnumerateArray());
+        Assert.Equal("read_knowledge_file", serializedTool.GetProperty("function").GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_AcceptsStructuredToolCallWithoutProse()
+    {
+        var handler = new RecordingHandler(_ => JsonResponse(CreateToolCallResponse()));
+        using var fixture = CreateClient(handler);
+        var tool = AIFunctionFactory.Create(
+            (string relativePath) => relativePath,
+            "read_knowledge_file",
+            "Read one approved knowledge file.");
+
+        var response = await fixture.Client.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "Read the file.")],
+            new ChatOptions { Tools = [tool], ToolMode = ChatToolMode.RequireAny });
+
+        var call = Assert.Single(response.Messages.SelectMany(message => message.Contents).OfType<FunctionCallContent>());
+        Assert.Equal("read_knowledge_file", call.Name);
+        Assert.Equal("budget.md", call.Arguments?["relativePath"]?.ToString());
+    }
+
+    [Fact]
     public async Task GetResponseAsync_SerializesTheConfiguredLlamaModel()
     {
         const string model = "llama3.2:3b";
@@ -211,6 +250,36 @@ public sealed class OllamaChatClientTests
         prompt_eval_duration = 1,
         eval_count = 1,
         eval_duration = 1
+    });
+
+    private static string CreateToolCallResponse() => JsonSerializer.Serialize(new
+    {
+        model = "configured-model",
+        created_at = "2026-07-18T00:00:00Z",
+        message = new
+        {
+            role = "assistant",
+            content = string.Empty,
+            tool_calls = new[]
+            {
+                new
+                {
+                    function = new
+                    {
+                        name = "read_knowledge_file",
+                        arguments = new { relativePath = "budget.md" }
+                    }
+                }
+            }
+        },
+        done = true,
+        done_reason = "stop",
+        total_duration = 1,
+        load_duration = 1,
+        prompt_eval_count = 1,
+        prompt_eval_duration = 1,
+        eval_count = 0,
+        eval_duration = 0
     });
 
     private static HttpResponseMessage JsonResponse(string content) => new(HttpStatusCode.OK)

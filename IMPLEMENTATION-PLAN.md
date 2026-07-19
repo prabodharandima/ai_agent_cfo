@@ -16,6 +16,10 @@ Phase 8 replaced the former local finance persistence and stdio MCP transport wi
 
 The solution remains one ASP.NET Core business monolith with four in-process agents. The two hosted MCP services are approved bounded integration services, not per-agent services or a general microservice platform.
 
+## MCP integration refactor - Complete
+
+The current Streamable HTTP clients use one minimal generic `McpToolAdapter` for SDK initialization, `tools/list` discovery, approved-tool caching, bounded tool definition forwarding to `IChatClient`, selected-name/canonical-argument validation, and `tools/call`. Tool discovery is constrained by configured Finance and Knowledge allow-lists; a model cannot choose an arbitrary endpoint, tool, or financial argument. The existing four-agent routing and typed Finance/Knowledge facades remain to protect deterministic result contracts, filesystem restrictions, and ChromaDB RAG behavior. Results and validation evidence are recorded in `docs/MCP-INTEGRATION-REFACTOR-RESULTS.md`.
+
 ## Validation
 
 Use serialized solution commands:
@@ -31,4 +35,4 @@ For the complete local deployment use `docker compose up --build -d`, then run f
 
 ## Scope controls
 
-Do not add cloud LLM providers, authentication, streaming, persistent history, arbitrary MCP tools, CQRS, MediatR, extra agents, messaging, Kubernetes, or a second business application. Keep finance values deterministic and ChromaDB responsible for semantic RAG citations.
+Do not add cloud LLM providers, authentication, streaming, persistent history, arbitrary or unapproved MCP tools, CQRS, MediatR, extra agents, messaging, Kubernetes, or a second business application. Keep finance values deterministic and ChromaDB responsible for semantic RAG citations.
