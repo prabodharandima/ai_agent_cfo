@@ -131,3 +131,12 @@ The following proven-safe backend cleanup was applied. The required Debug and Re
 - No runtime stdio process-launch code, SQLite package/source/configuration, obsolete Finance fallback, duplicate transport DTO, or unused direct runtime package was found. No package was removed.
 - Retained the three SQLite ignore patterns in `.gitignore`: an existing ignored `data/cfo-agent.db` is present locally. Removing the patterns would surface user data, while this task must not delete or relocate application data.
 - Retained `data/imports/.gitkeep`, `data/knowledge/.gitkeep`, the empty local frontend scaffold directory, frontend assets, scripts, Docker files, and documentation because they are outside this backend/MCP cleanup scope or require proof beyond this task.
+
+## TASK-CLEANUP-003 outcome
+
+- Removed `src/cfo-agent-ui/public/icons.svg`: repository-wide searches found no import, HTML public URL, CSS URL, Vite, Nginx, test, or Playwright reference. `favicon.svg` remains referenced by `index.html` and was retained.
+- Removed the empty, untracked `src/cfo-agent-ui/src/assets/` Vite scaffold directory after confirming it had no entries or references.
+- Updated the stale `Mock LLM` Playwright assertion in `e2e/chat.spec.ts` to confirm that the intentionally retired, provider-specific label is absent. The test still exercises the same page and all seven existing scenarios; no E2E case was deleted or skipped.
+- Retained every direct npm dependency and devDependency: each has an active application import, TypeScript/Vite/Vitest/Playwright/Oxlint configuration use, or test setup use. No npm package was removed.
+- Retained components, TypeScript contracts, CSS, API client behavior, selectors, `favicon.svg`, the container Playwright configuration, and the older local Playwright harness. No other frontend candidate was proven safe; the local harness also depends on a script outside this task's scope.
+- `npm ci`, unit tests (2 files, 10 tests), and the production build pass. The stable container Playwright command was run against the existing healthy deployment, but five data-workflow scenarios exceeded the old five-second deterministic-response wait because the user deployment currently selects Ollama. This environment-specific result is not caused by the removed asset or the provider-neutral assertion; no Compose or provider configuration was changed by this task.

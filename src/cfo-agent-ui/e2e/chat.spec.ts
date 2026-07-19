@@ -8,7 +8,7 @@ async function ask(page: import('@playwright/test').Page, prompt: string) {
 test.beforeEach(async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'CFO AI Agent' })).toBeVisible()
-  await expect(page.getByText('Mock LLM')).toBeVisible()
+  await expect(page.getByText('Mock LLM')).toHaveCount(0)
 })
 
 test('shows the deterministic weekly sales summary', async ({ page }) => {
