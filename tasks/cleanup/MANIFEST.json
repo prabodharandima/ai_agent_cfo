@@ -1,0 +1,14 @@
+{
+  "folder": "cleanup",
+  "task_count": 5,
+  "files": [
+    "CLEANUP-EXECUTION-ORDER.md",
+    "README-CLEANUP.md",
+    "TASK-CLEANUP-001-repository-inventory-and-cleanup-plan.md",
+    "TASK-CLEANUP-002-backend-and-mcp-cleanup.md",
+    "TASK-CLEANUP-003-frontend-cleanup.md",
+    "TASK-CLEANUP-004-infrastructure-tests-and-documentation-cleanup.md",
+    "TASK-CLEANUP-005-final-regression-and-cleanup-gate.md",
+    "MANIFEST.json"
+  ]
+}
