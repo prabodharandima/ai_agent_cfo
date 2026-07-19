@@ -8,7 +8,6 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "vitest",
-    "test:e2e": "playwright test",
     "test:e2e:container": "playwright test --config playwright.container.config.ts",
     "preview": "vite preview"
   },

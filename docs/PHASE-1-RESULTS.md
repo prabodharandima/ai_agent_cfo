@@ -1,5 +1,7 @@
 # Phase 1 Results
 
+> Historical record: the Phase 1 SQLite implementation was superseded in Phase 8 by Finance MCP-owned PostgreSQL. See [PHASE-8-RESULTS.md](PHASE-8-RESULTS.md).
+
 ## Gate status
 
 Passed on 2026-07-15. Deterministic finance data and calculation tests use temporary SQLite databases and fixed `TimeProvider` instances.

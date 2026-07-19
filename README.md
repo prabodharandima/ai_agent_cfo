@@ -69,6 +69,8 @@ npm run build
 npm run test:e2e:container
 ```
 
+`test:e2e:container` is deterministic when the Docker API uses the default Mock provider. If the deployment is intentionally configured for Ollama, use the manual workflows instead or recreate the API with `AI_PROVIDER=Mock` before running this timing-sensitive regression suite.
+
 Run `scripts/test-phase-8-containers.ps1` from the repository root for the isolated real-container resilience gate. See [Phase 8 results](docs/PHASE-8-RESULTS.md), [architecture](APPLICATION_ARCHITECTURE.md), [demo script](docs/DEMO-SCRIPT.md), and [security notes](docs/SECURITY-NOTES.md).
 
 For a full first-run, verification, MCP, frontend-development, and troubleshooting walkthrough, see [USER-GUIDE.md](USER-GUIDE.md).

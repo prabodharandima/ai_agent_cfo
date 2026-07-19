@@ -248,6 +248,7 @@ npm run test:e2e:container
 ```
 
 `test:e2e:container` runs Playwright against the already-running Docker frontend and verifies all five MVP scenarios.
+Run it with the default Mock provider. Ollama is supported for manual use, but its response time is not the deterministic timing contract exercised by this browser regression suite.
 
 Run the isolated MCP/container resilience gate from the repository root:
 

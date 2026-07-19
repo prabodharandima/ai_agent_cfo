@@ -2,6 +2,8 @@
 
 Run exactly one task at a time.
 
+> Historical index: this file records the original Phase 0-6 sequence. Later work has its own execution orders: [Phase 7](tasks/phase-7/PHASE-7-EXECUTION-ORDER.md), [Phase 8](tasks/phase-8/PHASE-8-EXECUTION-ORDER.md), and [cleanup](tasks/cleanup/CLEANUP-EXECUTION-ORDER.md).
+
 | Order | Task |
 |---:|---|
 | 1 | `tasks/phase-0/TASK-CFO-000-repository-discovery-and-guardrails.md` |
