@@ -16,6 +16,8 @@ public sealed class FinanceMcpOptions
     public string BaseUrl { get; init; } = string.Empty;
 
     public int TimeoutSeconds { get; init; }
+
+    public IReadOnlyList<string> AllowedToolNames { get; init; } = [];
 }
 
 public sealed class KnowledgeFileMcpOptions
@@ -29,4 +31,6 @@ public sealed class KnowledgeFileMcpOptions
     public bool UseLocalFallback { get; init; }
 
     public int TimeoutSeconds { get; init; }
+
+    public IReadOnlyList<string> AllowedToolNames { get; init; } = [];
 }

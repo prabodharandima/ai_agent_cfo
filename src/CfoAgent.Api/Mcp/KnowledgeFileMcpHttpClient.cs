@@ -1,176 +1,34 @@
 using System.Text.Json;
-using CfoAgent.Api.Configuration;
-using Microsoft.Extensions.Options;
-using ModelContextProtocol.Client;
-using ModelContextProtocol.Protocol;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace CfoAgent.Api.Mcp;
 
 public sealed class KnowledgeFileMcpHttpClient(
-    IOptions<McpOptions> options,
-    IHttpClientFactory httpClientFactory,
-    ILogger<KnowledgeFileMcpHttpClient> logger) : IKnowledgeFileMcpRemoteClient, IAsyncDisposable
+    [FromKeyedServices(McpToolAdapter.KnowledgeFilesKey)] IMcpToolAdapter toolAdapter) : IKnowledgeFileMcpRemoteClient
 {
-    public const string HttpClientName = "KnowledgeFileMcp";
     private const string DependencyName = "Knowledge File MCP";
-    private static readonly string[] RequiredTools = ["list_knowledge_files", "read_knowledge_file"];
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private readonly SemaphoreSlim gate = new(1, 1);
-    private McpClient? client;
 
-    public Task<IReadOnlyList<string>> DiscoverToolsAsync(CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<string>> DiscoverToolsAsync(CancellationToken cancellationToken) =>
+        (await toolAdapter.GetApprovedToolsAsync(null, cancellationToken))
+            .Select(tool => tool.Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+    public async Task<IReadOnlyList<string>> ListFilesAsync(CancellationToken cancellationToken)
     {
-        EnsureEnabled();
-        return ExecuteDependencyOperationAsync(async token =>
-        {
-            var connectedClient = await GetClientAsync(token);
-            var names = (await connectedClient.ListToolsAsync(cancellationToken: token))
-                .Select(tool => tool.Name)
-                .OrderBy(name => name, StringComparer.Ordinal)
-                .ToArray();
-            var missing = RequiredTools.Except(names, StringComparer.Ordinal).Any();
-            var unexpected = names.Except(RequiredTools, StringComparer.Ordinal).Any();
-            if (missing || unexpected)
-            {
-                throw new McpDependencyException(DependencyName, McpDependencyFailureKind.CapabilityMismatch);
-            }
-
-            logger.LogInformation("Knowledge File MCP capability discovery succeeded with {ToolCount} read-only tools.", names.Length);
-            return (IReadOnlyList<string>)names;
-        }, cancellationToken);
+        var data = await toolAdapter.CallApprovedToolAsync("list_knowledge_files", null, cancellationToken);
+        return Deserialize<string[]>(data);
     }
 
-    public async Task<IReadOnlyList<string>> ListFilesAsync(CancellationToken cancellationToken) =>
-        await CallToolAsync<string[]>("list_knowledge_files", null, cancellationToken);
-
-    public Task<string> ReadFileAsync(string relativePath, CancellationToken cancellationToken)
+    public async Task<string> ReadFileAsync(string relativePath, CancellationToken cancellationToken)
     {
         ValidateRelativePath(relativePath);
-        return CallToolAsync<string>(
+        var data = await toolAdapter.CallApprovedToolAsync(
             "read_knowledge_file",
             new Dictionary<string, object?> { ["relativePath"] = relativePath },
             cancellationToken);
-    }
-
-    private async Task<T> CallToolAsync<T>(
-        string toolName,
-        IReadOnlyDictionary<string, object?>? arguments,
-        CancellationToken cancellationToken)
-    {
-        await DiscoverToolsAsync(cancellationToken);
-        return await ExecuteDependencyOperationAsync(async token =>
-        {
-            var connectedClient = await GetClientAsync(token);
-            var result = await connectedClient.CallToolAsync(toolName, arguments, cancellationToken: token);
-            if (result.IsError == true)
-            {
-                throw new McpDependencyException(DependencyName, McpDependencyFailureKind.InvalidResponse);
-            }
-
-            var content = result.Content.OfType<TextContentBlock>().SingleOrDefault()?.Text;
-            if (string.IsNullOrWhiteSpace(content))
-            {
-                throw new McpDependencyException(DependencyName, McpDependencyFailureKind.InvalidResponse);
-            }
-
-            KnowledgeFileMcpResponse<T>? response;
-            try
-            {
-                response = JsonSerializer.Deserialize<KnowledgeFileMcpResponse<T>>(content, JsonOptions);
-            }
-            catch (JsonException exception)
-            {
-                throw new McpDependencyException(DependencyName, McpDependencyFailureKind.InvalidResponse, exception);
-            }
-
-            if (response is null || !response.IsSuccess || response.Data is null)
-            {
-                throw new McpDependencyException(DependencyName, McpDependencyFailureKind.InvalidResponse);
-            }
-
-            logger.LogInformation("Knowledge File MCP tool {ToolName} completed successfully.", toolName);
-            return response.Data;
-        }, cancellationToken);
-    }
-
-    private async Task<McpClient> GetClientAsync(CancellationToken cancellationToken)
-    {
-        if (client is not null)
-        {
-            return client;
-        }
-
-        await gate.WaitAsync(cancellationToken);
-        try
-        {
-            if (client is not null)
-            {
-                return client;
-            }
-
-            var httpClient = httpClientFactory.CreateClient(HttpClientName);
-            var transport = new HttpClientTransport(
-                new HttpClientTransportOptions
-                {
-                    Endpoint = FinanceMcpClient.CreateMcpEndpoint(options.Value.KnowledgeFiles.BaseUrl),
-                    TransportMode = HttpTransportMode.StreamableHttp,
-                    ConnectionTimeout = TimeSpan.FromSeconds(options.Value.KnowledgeFiles.TimeoutSeconds)
-                },
-                httpClient,
-                ownsHttpClient: true);
-            try
-            {
-                client = await McpClient.CreateAsync(transport, cancellationToken: cancellationToken);
-            }
-            catch
-            {
-                await transport.DisposeAsync();
-                throw;
-            }
-
-            logger.LogInformation("Connected to Knowledge File MCP over Streamable HTTP.");
-            return client;
-        }
-        finally
-        {
-            gate.Release();
-        }
-    }
-
-    private async Task<T> ExecuteDependencyOperationAsync<T>(
-        Func<CancellationToken, Task<T>> operation,
-        CancellationToken cancellationToken)
-    {
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(options.Value.KnowledgeFiles.TimeoutSeconds));
-        try
-        {
-            return await operation(timeout.Token);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (OperationCanceledException exception)
-        {
-            throw new McpDependencyException(DependencyName, McpDependencyFailureKind.Timeout, exception);
-        }
-        catch (McpDependencyException)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            throw new McpDependencyException(DependencyName, McpDependencyFailureKind.Unavailable, exception);
-        }
-    }
-
-    private void EnsureEnabled()
-    {
-        if (!options.Value.KnowledgeFiles.Enabled)
-        {
-            throw new McpDependencyException(DependencyName, McpDependencyFailureKind.Disabled);
-        }
+        return Deserialize<string>(data);
     }
 
     internal static void ValidateRelativePath(string relativePath)
@@ -192,24 +50,16 @@ public sealed class KnowledgeFileMcpHttpClient(
         }
     }
 
-    public async ValueTask DisposeAsync()
+    private static T Deserialize<T>(JsonElement data)
     {
-        await gate.WaitAsync();
         try
         {
-            if (client is not null)
-            {
-                await client.DisposeAsync();
-            }
-
-            client = null;
+            return data.Deserialize<T>(JsonOptions)
+                ?? throw new McpDependencyException(DependencyName, McpDependencyFailureKind.InvalidResponse);
         }
-        finally
+        catch (JsonException exception)
         {
-            gate.Release();
-            gate.Dispose();
+            throw new McpDependencyException(DependencyName, McpDependencyFailureKind.InvalidResponse, exception);
         }
     }
-
-    private sealed record KnowledgeFileMcpResponse<T>(bool IsSuccess, T? Data, string? Error);
 }

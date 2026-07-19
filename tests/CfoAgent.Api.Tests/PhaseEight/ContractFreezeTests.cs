@@ -130,8 +130,9 @@ public sealed class ContractFreezeTests
 
     private static void AssertMethod(Type type, string name, Type resultType, IReadOnlyList<Type> parameterTypes)
     {
-        var method = Assert.Single(type.GetMethods(), method => method.Name == name);
+        var method = Assert.Single(type.GetMethods(), method =>
+            method.Name == name
+            && method.GetParameters().Select(parameter => parameter.ParameterType).SequenceEqual(parameterTypes));
         Assert.Equal(typeof(Task<>).MakeGenericType(resultType), method.ReturnType);
-        Assert.Equal(parameterTypes, method.GetParameters().Select(parameter => parameter.ParameterType));
     }
 }

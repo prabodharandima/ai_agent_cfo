@@ -7,6 +7,8 @@ namespace CfoAgent.Api.Agents.Configuration;
 
 public static class AgentPromptTemplates
 {
+    public const string McpToolSelectionMarker = "[MCP:SELECT_TOOL]";
+    public const string McpCanonicalArgumentsMarker = "[MCP:CANONICAL_ARGUMENTS]";
     private const string VerifiedDataInstructions = "Write a concise executive response using only VERIFIED_DATA. Do not calculate, change, or add financial values. Return prose only; do not return tool calls.";
 
     public static string ForClassification(string message) => $$"""
@@ -34,6 +36,18 @@ public static class AgentPromptTemplates
         Combine the specialist results into one concise CFO response using only VERIFIED_DATA. Do not recalculate, change, or add financial values. Return prose only; do not return tool calls.
         [MOCK:ORCHESTRATE]
         {{JsonSerializer.Serialize(verifiedOutputs)}}
+        """;
+
+    public static string ForMcpToolSelection(
+        string userMessage,
+        IReadOnlyDictionary<string, object?> canonicalArguments) => $$"""
+        Select exactly one supplied tool that matches the user's request. Return a function call only.
+        Use CANONICAL_ARGUMENTS exactly as supplied. Do not calculate, alter, add, or remove argument values.
+        {{McpToolSelectionMarker}}
+        USER_REQUEST:
+        {{userMessage}}
+        {{McpCanonicalArgumentsMarker}}
+        {{JsonSerializer.Serialize(canonicalArguments)}}
         """;
 
     private static string Create(string marker, object verifiedPayload) =>

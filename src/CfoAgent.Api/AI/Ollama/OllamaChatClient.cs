@@ -44,7 +44,11 @@ public sealed class OllamaChatClient : IChatClient
         try
         {
             var response = await transport.GetResponseAsync(messages, requestOptions, timeoutSource.Token);
-            if (string.IsNullOrWhiteSpace(response.Text))
+            var hasFunctionCall = response.Messages
+                .SelectMany(message => message.Contents)
+                .OfType<FunctionCallContent>()
+                .Any();
+            if (string.IsNullOrWhiteSpace(response.Text) && !hasFunctionCall)
             {
                 throw new OllamaProviderException(OllamaFailureKind.InvalidResponse);
             }
@@ -118,7 +122,6 @@ public sealed class OllamaChatClient : IChatClient
         boundedOptions.ModelId = options.Model;
         boundedOptions.Temperature = (float)options.Temperature;
         boundedOptions.MaxOutputTokens = options.MaxOutputTokens;
-        boundedOptions.Tools = null;
         boundedOptions.AddOllamaOption(OllamaOption.NumCtx, options.ContextLength);
         return boundedOptions;
     }
