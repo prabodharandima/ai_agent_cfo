@@ -1,0 +1,14 @@
+{
+  "target_folder": "tasks/mcp_integration_refactor",
+  "task_count": 4,
+  "files": [
+    "MCP-INTEGRATION-REFACTOR-EXECUTION-ORDER.md",
+    "README-MCP-INTEGRATION-REFACTOR.md",
+    "READY-TO-PASTE-CODEX-PROMPT.md",
+    "TASK-MCP-REF-001-current-state-discovery.md",
+    "TASK-MCP-REF-002-minimal-refactor-design.md",
+    "TASK-MCP-REF-003-implement-generic-mcp-tool-adapter.md",
+    "TASK-MCP-REF-004-regression-and-documentation-gate.md",
+    "MANIFEST.json"
+  ]
+}
