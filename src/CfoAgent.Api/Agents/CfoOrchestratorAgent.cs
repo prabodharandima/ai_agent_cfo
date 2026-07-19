@@ -2,6 +2,7 @@ using System.Diagnostics;
 using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
+using CfoAgent.Api.Mcp;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CfoAgent.Api.Agents;
@@ -67,6 +68,10 @@ public sealed class CfoOrchestratorAgent(
             throw;
         }
         catch (OllamaProviderException)
+        {
+            throw;
+        }
+        catch (McpDependencyException)
         {
             throw;
         }

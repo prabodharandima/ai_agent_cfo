@@ -1,5 +1,6 @@
 using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Configuration;
+using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Rag.Chroma;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
@@ -20,6 +21,7 @@ public sealed class ApiExceptionHandler(
             OllamaProviderException { FailureKind: OllamaFailureKind.Unavailable } => (StatusCodes.Status503ServiceUnavailable, "The selected model provider is temporarily unavailable."),
             OllamaProviderException => (StatusCodes.Status503ServiceUnavailable, "The selected model provider returned an unusable response."),
             ChromaDependencyException => (StatusCodes.Status503ServiceUnavailable, "A required dependency is temporarily unavailable."),
+            McpDependencyException => (StatusCodes.Status503ServiceUnavailable, "A required dependency is temporarily unavailable."),
             TimeoutException => (StatusCodes.Status504GatewayTimeout, "The request timed out."),
             OperationCanceledException when !httpContext.RequestAborted.IsCancellationRequested => (StatusCodes.Status504GatewayTimeout, "The request timed out."),
             InvalidOperationException => (StatusCodes.Status503ServiceUnavailable, "The requested operation is temporarily unavailable."),
@@ -35,6 +37,14 @@ public sealed class ApiExceptionHandler(
                 "chat",
                 "Failure",
                 providerException.FailureKind,
+                statusCode);
+        }
+        else if (exception is McpDependencyException dependencyException)
+        {
+            logger.LogWarning(
+                "MCP dependency operation failed. Dependency: {Dependency}; FailureCategory: {FailureCategory}; StatusCode: {StatusCode}",
+                dependencyException.DependencyName,
+                dependencyException.FailureKind,
                 statusCode);
         }
         else

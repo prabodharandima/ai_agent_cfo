@@ -6,6 +6,7 @@ using CfoAgent.Api.Agents.Contracts;
 using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Features.Forecasting;
 using CfoAgent.Api.Features.Sales;
+using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Tests.Finance;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -13,23 +14,17 @@ using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Tests;
 
-public class SpecialistAgentTests
+public sealed class SpecialistAgentTests
 {
-    private static readonly DateOnly DemoDate = new(2026, 7, 15);
-    private static readonly TimeProvider Clock = new FixedTimeProvider(DemoDate);
+    private static readonly TimeProvider Clock = new FixedTimeProvider(new DateOnly(2026, 7, 15));
 
     [Fact]
-    public async Task SalesAgentReturnsVerifiedSummaryComparisonAndTopProducts()
+    public async Task SalesAgentReturnsVerifiedMcpSummaryComparisonAndTopProducts()
     {
-        await using var database = await TemporaryFinanceDatabase.CreateAsync();
-        var product = await database.AddProductAsync("FIN-001", "Ledger Pro");
-        database.AddSale(product, "PREVIOUS", new DateOnly(2026, 7, 8), 1, 100m, 0m, 40m);
-        database.AddSale(product, "CURRENT", new DateOnly(2026, 7, 14), 2, 100m, 0m, 40m);
-        await database.SaveChangesAsync();
         using var client = CreateClient();
         using var services = new ServiceCollection().BuildServiceProvider();
-        var analysisService = new SalesAnalysisService(database.Context, Clock);
-        var agent = new SalesAnalysisAgent(analysisService, new CfoAgentFramework(client, NullLoggerFactory.Instance, services));
+        var mcp = new FinanceFake();
+        var agent = new SalesAnalysisAgent(new CfoAgentFramework(client, NullLoggerFactory.Instance, services), mcp);
         var request = new AgentRequest("Show finance data.", "sales-session");
 
         var summary = await agent.GetWeeklySummaryAsync(request, CancellationToken.None);
@@ -45,19 +40,12 @@ public class SpecialistAgentTests
     }
 
     [Fact]
-    public async Task ForecastingAgentReturnsFiveVerifiedForecastYears()
+    public async Task ForecastingAgentReturnsFiveDeterministicForecastYearsFromMcpHistory()
     {
-        await using var database = await TemporaryFinanceDatabase.CreateAsync();
-        var product = await database.AddProductAsync("FIN-001", "Ledger Pro");
-        database.AddSale(product, "2023", new DateOnly(2023, 6, 1), 1, 100m, 0m, 40m);
-        database.AddSale(product, "2024", new DateOnly(2024, 6, 1), 1, 200m, 0m, 40m);
-        database.AddSale(product, "2025", new DateOnly(2025, 6, 1), 1, 300m, 0m, 40m);
-        await database.SaveChangesAsync();
         using var client = CreateClient();
         using var services = new ServiceCollection().BuildServiceProvider();
-        var analysisService = new SalesAnalysisService(database.Context, Clock);
-        var forecastingService = new SalesForecastingService(analysisService, Clock);
-        var agent = new ForecastingAgent(forecastingService, new CfoAgentFramework(client, NullLoggerFactory.Instance, services));
+        var mcp = new FinanceFake();
+        var agent = new ForecastingAgent(new SalesForecastingService(), new CfoAgentFramework(client, NullLoggerFactory.Instance, services), mcp);
 
         var result = await agent.GetForecastAsync(new AgentRequest("Give me a forecast."), CancellationToken.None);
 
@@ -77,9 +65,16 @@ public class SpecialistAgentTests
         Assert.Contains("based only on verified context", result.Answer, StringComparison.Ordinal);
     }
 
-    private static MockChatClient CreateClient() => new(Options.Create(new AiOptions
+    private static MockChatClient CreateClient() => new(Options.Create(new AiOptions { Provider = "Mock", Model = "DeterministicMock" }));
+
+    private sealed class FinanceFake : IFinanceMcpClient
     {
-        Provider = "Mock",
-        Model = "DeterministicMock"
-    }));
+        private static readonly SalesPeriod Current = new(new DateOnly(2026, 7, 13), new DateOnly(2026, 7, 15));
+        public Task<SalesSummary> GetCurrentWeekSummaryAsync(CancellationToken cancellationToken) => Task.FromResult(Summary(Current, 200m));
+        public Task<WeeklySalesComparison> GetWeekOverWeekComparisonAsync(CancellationToken cancellationToken) => Task.FromResult(new WeeklySalesComparison(Summary(Current, 200m), Summary(new SalesPeriod(new DateOnly(2026, 7, 6), new DateOnly(2026, 7, 12)), 100m), 100m, 100m, SalesChangeDirection.Increased, Array.Empty<string>()));
+        public Task<TopProductsResult> GetCurrentMonthTopProductsAsync(CancellationToken cancellationToken) => Task.FromResult(new TopProductsResult(new SalesPeriod(new DateOnly(2026, 7, 1), new DateOnly(2026, 7, 15)), [new TopProduct("FIN-001", "Ledger Pro", 2m, 200m, 120m)], Array.Empty<string>()));
+        public Task<HistoricalYearlySalesResult> GetHistoricalYearlyTotalsAsync(CancellationToken cancellationToken) => Task.FromResult(new HistoricalYearlySalesResult([new(2021, 100m), new(2022, 200m), new(2023, 300m), new(2024, 400m), new(2025, 500m)], Array.Empty<string>()));
+        public Task<BudgetTargetResult> GetBudgetTargetAsync(int year, int? month, CancellationToken cancellationToken) => throw new NotSupportedException();
+        private static SalesSummary Summary(SalesPeriod period, decimal revenue) => new(period, revenue, 80m, revenue - 80m, (revenue - 80m) / revenue * 100m, 2m, 1, revenue, new TopProduct("FIN-001", "Ledger Pro", 2m, revenue, revenue - 80m), Array.Empty<string>());
+    }
 }

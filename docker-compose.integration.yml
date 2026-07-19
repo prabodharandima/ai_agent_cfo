@@ -1,0 +1,65 @@
+services:
+  frontend:
+    profiles: ["full-deployment"]
+
+  rag-init:
+    image: cfo-agent-api:local
+    command: ["--ingest-rag"]
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      AI__Provider: Mock
+      AI__Model: DeterministicMock
+      Chroma__BaseUrl: http://chromadb:8000
+      Rag__KnowledgeFilesRoot: /knowledge
+      Mcp__Finance__Enabled: "false"
+      Mcp__KnowledgeFiles__Enabled: "false"
+      Mcp__KnowledgeFiles__UseLocalFallback: "false"
+    volumes:
+      - type: bind
+        source: ./data/knowledge
+        target: /knowledge
+        read_only: true
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: "no"
+
+  api:
+    environment:
+      AI__Provider: Mock
+      AI__Model: DeterministicMock
+      AI__SimulatedDelayMilliseconds: "250"
+      Mcp__Finance__Enabled: "true"
+      Mcp__KnowledgeFiles__Enabled: "true"
+      Mcp__KnowledgeFiles__UseLocalFallback: "false"
+    depends_on:
+      rag-init:
+        condition: service_completed_successfully
+
+  container-tests:
+    profiles: ["integration"]
+    image: mcr.microsoft.com/dotnet/sdk:10.0.302
+    working_dir: /workspace
+    entrypoint:
+      - dotnet
+      - vstest
+      - tests/CfoAgent.Api.Tests/bin/Release/net10.0/CfoAgent.Api.Tests.dll
+      - --TestCaseFilter:Category=ContainerIntegration
+      - --Logger:console;Verbosity=normal
+    environment:
+      CFO_CONTAINER_GATE: "true"
+      CFO_CONTAINER_API_BASE_URL: http://api:8080
+      CFO_CONTAINER_FINANCE_MCP_BASE_URL: http://finance-mcp:8080
+      CFO_CONTAINER_KNOWLEDGE_MCP_BASE_URL: http://knowledge-mcp:8080
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace
+        read_only: true
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - backend

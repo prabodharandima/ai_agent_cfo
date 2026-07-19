@@ -7,6 +7,7 @@ using CfoAgent.Api.Agents.Contracts;
 using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Features.Forecasting;
 using CfoAgent.Api.Features.Sales;
+using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Rag.Chroma;
 using CfoAgent.Api.Rag.Embeddings;
 using CfoAgent.Api.Rag.Retrieval;
@@ -40,19 +41,15 @@ public sealed class CfoOrchestratorAgentTests
     [Fact]
     public async Task HandleAsync_CombinesForecastAndKnowledgeForForecastAssumptions()
     {
-        await using var database = await TemporaryFinanceDatabase.CreateAsync();
-        var product = await database.AddProductAsync("FIN-001", "Ledger Pro");
-        database.AddSale(product, "2023", new DateOnly(2023, 6, 1), 1, 100m, 0m, 40m);
-        database.AddSale(product, "2024", new DateOnly(2024, 6, 1), 1, 200m, 0m, 40m);
-        database.AddSale(product, "2025", new DateOnly(2025, 6, 1), 1, 300m, 0m, 40m);
-        await database.SaveChangesAsync();
-
         using var client = CreateClient();
         using var services = new ServiceCollection().BuildServiceProvider();
         var framework = new CfoAgentFramework(client, NullLoggerFactory.Instance, services);
-        var salesService = new SalesAnalysisService(database.Context, new FixedTimeProvider(new DateOnly(2026, 7, 15)));
-        var salesAgent = new SalesAnalysisAgent(salesService, framework);
-        var forecastAgent = new ForecastingAgent(new SalesForecastingService(salesService, new FixedTimeProvider(new DateOnly(2026, 7, 15))), framework);
+        var financeClient = new FinanceFake();
+        var salesAgent = new SalesAnalysisAgent(framework, financeClient);
+        var forecastAgent = new ForecastingAgent(
+            new SalesForecastingService(),
+            framework,
+            financeClient);
         var knowledgeAgent = new FinancialKnowledgeAgent(CreateRetrievalService(), framework, CreateRagOptions());
         var orchestrator = new CfoOrchestratorAgent(salesAgent, forecastAgent, knowledgeAgent, framework);
 
@@ -102,6 +99,15 @@ public sealed class CfoOrchestratorAgentTests
     });
 
     private static MockChatClient CreateClient() => new(Options.Create(new AiOptions { Provider = "Mock", Model = "DeterministicMock" }));
+
+    private sealed class FinanceFake : IFinanceMcpClient
+    {
+        public Task<SalesSummary> GetCurrentWeekSummaryAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<WeeklySalesComparison> GetWeekOverWeekComparisonAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<TopProductsResult> GetCurrentMonthTopProductsAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<HistoricalYearlySalesResult> GetHistoricalYearlyTotalsAsync(CancellationToken cancellationToken) => Task.FromResult(new HistoricalYearlySalesResult([new(2023, 100m), new(2024, 200m), new(2025, 300m)], Array.Empty<string>()));
+        public Task<BudgetTargetResult> GetBudgetTargetAsync(int year, int? month, CancellationToken cancellationToken) => throw new NotSupportedException();
+    }
 
     private sealed class KnowledgeHandler : HttpMessageHandler
     {

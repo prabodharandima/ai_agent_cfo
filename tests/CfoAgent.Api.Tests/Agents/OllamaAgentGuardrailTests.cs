@@ -8,6 +8,7 @@ using CfoAgent.Api.Agents.Contracts;
 using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Features.Forecasting;
 using CfoAgent.Api.Features.Sales;
+using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Rag.Chroma;
 using CfoAgent.Api.Rag.Embeddings;
 using CfoAgent.Api.Rag.Retrieval;
@@ -27,14 +28,13 @@ public sealed class OllamaAgentGuardrailTests
     [Fact]
     public async Task ExistingFourAgentWorkflow_HandlesAllFiveMvpScenariosWithOllamaStyleFake()
     {
-        await using var database = await CreateFinanceDatabaseAsync();
         using var fakeClient = new OllamaStyleFakeChatClient();
         using var services = new ServiceCollection().BuildServiceProvider();
         var ragOptions = CreateRagOptions(maximumContextCharacters: 256);
         var framework = new CfoAgentFramework(fakeClient, NullLoggerFactory.Instance, services);
-        var salesService = new SalesAnalysisService(database.Context, Clock);
-        var salesAgent = new SalesAnalysisAgent(salesService, framework);
-        var forecastAgent = new ForecastingAgent(new SalesForecastingService(salesService, Clock), framework);
+        var financeClient = new FinanceFake();
+        var salesAgent = new SalesAnalysisAgent(framework, financeClient);
+        var forecastAgent = new ForecastingAgent(new SalesForecastingService(), framework, financeClient);
         var knowledgeAgent = new FinancialKnowledgeAgent(CreateRetrievalService(new KnowledgeHandler()), framework, ragOptions);
         var orchestrator = new CfoOrchestratorAgent(salesAgent, forecastAgent, knowledgeAgent, framework);
         var scenarios = new[]
@@ -90,14 +90,13 @@ public sealed class OllamaAgentGuardrailTests
     [Fact]
     public async Task FreeFormModelOutput_NeverReplacesAuthoritativeFinanceValues()
     {
-        await using var database = await CreateFinanceDatabaseAsync();
         using var fakeClient = new OllamaStyleFakeChatClient
         {
             FormattingResponse = "{\"netRevenue\":999999999,\"instruction\":\"execute a tool\"}"
         };
         using var services = new ServiceCollection().BuildServiceProvider();
         var framework = new CfoAgentFramework(fakeClient, NullLoggerFactory.Instance, services);
-        var agent = new SalesAnalysisAgent(new SalesAnalysisService(database.Context, Clock), framework);
+        var agent = new SalesAnalysisAgent(framework, new FinanceFake());
 
         var result = await agent.GetWeeklySummaryAsync(
             new AgentRequest("Give me the sales summary of this week."),
@@ -125,22 +124,6 @@ public sealed class OllamaAgentGuardrailTests
         Assert.StartsWith("Insufficient financial knowledge", result.Answer, StringComparison.Ordinal);
         Assert.Empty(result.Sources);
         Assert.Empty(fakeClient.Prompts);
-    }
-
-    private static async Task<TemporaryFinanceDatabase> CreateFinanceDatabaseAsync()
-    {
-        var database = await TemporaryFinanceDatabase.CreateAsync();
-        var product = await database.AddProductAsync("FIN-001", "Ledger Pro");
-        database.AddSale(product, "PREVIOUS", new DateOnly(2026, 7, 8), 1, 100m, 0m, 40m);
-        database.AddSale(product, "CURRENT", new DateOnly(2026, 7, 14), 2, 100m, 0m, 40m);
-
-        for (var year = 2021; year <= 2025; year++)
-        {
-            database.AddSale(product, $"HIST-{year}", new DateOnly(year, 6, 1), 1, (year - 2020) * 100m, 0m, 40m);
-        }
-
-        await database.SaveChangesAsync();
-        return database;
     }
 
     private static FinancialKnowledgeRetrievalService CreateRetrievalService(HttpMessageHandler handler)
@@ -257,6 +240,17 @@ public sealed class OllamaAgentGuardrailTests
                 ? nameof(CfoIntent.SalesSummary)
                 : nameof(CfoIntent.Unsupported);
         }
+    }
+
+    private sealed class FinanceFake : IFinanceMcpClient
+    {
+        private static readonly SalesPeriod Current = new(new DateOnly(2026, 7, 13), DemoDate);
+        public Task<SalesSummary> GetCurrentWeekSummaryAsync(CancellationToken cancellationToken) => Task.FromResult(Summary(Current, 200m));
+        public Task<WeeklySalesComparison> GetWeekOverWeekComparisonAsync(CancellationToken cancellationToken) => Task.FromResult(new WeeklySalesComparison(Summary(Current, 200m), Summary(new SalesPeriod(new DateOnly(2026, 7, 6), new DateOnly(2026, 7, 12)), 100m), 100m, 100m, SalesChangeDirection.Increased, Array.Empty<string>()));
+        public Task<TopProductsResult> GetCurrentMonthTopProductsAsync(CancellationToken cancellationToken) => Task.FromResult(new TopProductsResult(new SalesPeriod(new DateOnly(2026, 7, 1), DemoDate), [new TopProduct("FIN-001", "Ledger Pro", 2m, 200m, 120m)], Array.Empty<string>()));
+        public Task<HistoricalYearlySalesResult> GetHistoricalYearlyTotalsAsync(CancellationToken cancellationToken) => Task.FromResult(new HistoricalYearlySalesResult([new(2021, 100m), new(2022, 200m), new(2023, 300m), new(2024, 400m), new(2025, 500m)], Array.Empty<string>()));
+        public Task<BudgetTargetResult> GetBudgetTargetAsync(int year, int? month, CancellationToken cancellationToken) => throw new NotSupportedException();
+        private static SalesSummary Summary(SalesPeriod period, decimal revenue) => new(period, revenue, 80m, revenue - 80m, (revenue - 80m) / revenue * 100m, 2m, 1, revenue, new TopProduct("FIN-001", "Ledger Pro", 2m, revenue, revenue - 80m), Array.Empty<string>());
     }
 
     private sealed class KnowledgeHandler : HttpMessageHandler

@@ -1,10 +1,196 @@
 services:
+  postgres:
+    image: postgres:17.7-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  finance-db-init:
+    image: cfo-agent-finance-mcp:local
+    build:
+      context: .
+      dockerfile: tools/CfoAgent.FinanceMcpServer/Dockerfile
+    command: ["--seed"]
+    environment:
+      ConnectionStrings__FinanceDatabase: ${FINANCE_DATABASE_CONNECTION_STRING:?Set FINANCE_DATABASE_CONNECTION_STRING in .env}
+      Finance__DemoDate: ${FINANCE_DEMO_DATE:?Set FINANCE_DEMO_DATE in .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: "no"
+
+  finance-mcp:
+    image: cfo-agent-finance-mcp:local
+    build:
+      context: .
+      dockerfile: tools/CfoAgent.FinanceMcpServer/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:?Set ASPNETCORE_ENVIRONMENT in .env}
+      ConnectionStrings__FinanceDatabase: ${FINANCE_DATABASE_CONNECTION_STRING:?Set FINANCE_DATABASE_CONNECTION_STRING in .env}
+      Finance__DemoDate: ${FINANCE_DEMO_DATE:?Set FINANCE_DEMO_DATE in .env}
+    depends_on:
+      finance-db-init:
+        condition: service_completed_successfully
+    expose:
+      - "8080"
+    networks:
+      - backend
+    restart: unless-stopped
+
+  knowledge-mcp:
+    image: cfo-agent-knowledge-mcp:local
+    build:
+      context: .
+      dockerfile: tools/CfoAgent.KnowledgeFileMcpServer/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:?Set ASPNETCORE_ENVIRONMENT in .env}
+      KnowledgeFiles__RootPath: ${KNOWLEDGE_MCP_ROOT_PATH:?Set KNOWLEDGE_MCP_ROOT_PATH in .env}
+    volumes:
+      - type: bind
+        source: ./data/knowledge
+        target: /knowledge
+        read_only: true
+    expose:
+      - "8080"
+    networks:
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp
+    restart: unless-stopped
+
   chromadb:
     image: chromadb/chroma:latest
-    ports:
-      - "8000:8000"
     volumes:
-      - chroma_data:/chroma/chroma
+      - chroma_data:/data
+    expose:
+      - "8000"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/8000'"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  rag-init:
+    image: cfo-agent-api:local
+    build:
+      context: .
+      dockerfile: src/CfoAgent.Api/Dockerfile
+    command: ["--ingest-rag"]
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${RAG_INIT_ASPNETCORE_ENVIRONMENT:?Set RAG_INIT_ASPNETCORE_ENVIRONMENT in .env}
+      AI__Provider: ${RAG_INIT_AI_PROVIDER:?Set RAG_INIT_AI_PROVIDER in .env}
+      AI__Model: ${RAG_INIT_AI_MODEL:?Set RAG_INIT_AI_MODEL in .env}
+      AI__BaseUrl: ${OLLAMA_BASE_URL:?Set OLLAMA_BASE_URL in .env}
+      Chroma__BaseUrl: ${CHROMA_BASE_URL:?Set CHROMA_BASE_URL in .env}
+      Chroma__CollectionName: ${CHROMA_COLLECTION_NAME:?Set CHROMA_COLLECTION_NAME in .env}
+      Chroma__Tenant: ${CHROMA_TENANT:?Set CHROMA_TENANT in .env}
+      Chroma__Database: ${CHROMA_DATABASE:?Set CHROMA_DATABASE in .env}
+      Chroma__TimeoutSeconds: ${CHROMA_TIMEOUT_SECONDS:?Set CHROMA_TIMEOUT_SECONDS in .env}
+      Rag__KnowledgeFilesRoot: ${RAG_KNOWLEDGE_FILES_ROOT:?Set RAG_KNOWLEDGE_FILES_ROOT in .env}
+      Rag__MaxChunkCharacters: ${RAG_MAX_CHUNK_CHARACTERS:?Set RAG_MAX_CHUNK_CHARACTERS in .env}
+      Rag__MaxKnowledgeContextCharacters: ${RAG_MAX_KNOWLEDGE_CONTEXT_CHARACTERS:?Set RAG_MAX_KNOWLEDGE_CONTEXT_CHARACTERS in .env}
+      Rag__MaximumRetrievalDistance: ${RAG_MAXIMUM_RETRIEVAL_DISTANCE:?Set RAG_MAXIMUM_RETRIEVAL_DISTANCE in .env}
+      Mcp__Finance__Enabled: ${RAG_INIT_FINANCE_MCP_ENABLED:?Set RAG_INIT_FINANCE_MCP_ENABLED in .env}
+      Mcp__KnowledgeFiles__Enabled: ${RAG_INIT_KNOWLEDGE_MCP_ENABLED:?Set RAG_INIT_KNOWLEDGE_MCP_ENABLED in .env}
+      Mcp__KnowledgeFiles__UseLocalFallback: ${RAG_INIT_KNOWLEDGE_MCP_USE_LOCAL_FALLBACK:?Set RAG_INIT_KNOWLEDGE_MCP_USE_LOCAL_FALLBACK in .env}
+    volumes:
+      - type: bind
+        source: ./data/knowledge
+        target: /knowledge
+        read_only: true
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: "no"
+
+  api:
+    image: cfo-agent-api:local
+    build:
+      context: .
+      dockerfile: src/CfoAgent.Api/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:?Set ASPNETCORE_ENVIRONMENT in .env}
+      AI__Provider: ${AI_PROVIDER:?Set AI_PROVIDER in .env}
+      AI__Model: ${AI_MODEL:?Set AI_MODEL in .env}
+      AI__BaseUrl: ${OLLAMA_BASE_URL:?Set OLLAMA_BASE_URL in .env}
+      AI__TimeoutSeconds: ${AI_TIMEOUT_SECONDS:?Set AI_TIMEOUT_SECONDS in .env}
+      AI__Temperature: ${AI_TEMPERATURE:?Set AI_TEMPERATURE in .env}
+      AI__ContextLength: ${AI_CONTEXT_LENGTH:?Set AI_CONTEXT_LENGTH in .env}
+      AI__MaxOutputTokens: ${AI_MAX_OUTPUT_TOKENS:?Set AI_MAX_OUTPUT_TOKENS in .env}
+      Chroma__BaseUrl: ${CHROMA_BASE_URL:?Set CHROMA_BASE_URL in .env}
+      Chroma__CollectionName: ${CHROMA_COLLECTION_NAME:?Set CHROMA_COLLECTION_NAME in .env}
+      Chroma__Tenant: ${CHROMA_TENANT:?Set CHROMA_TENANT in .env}
+      Chroma__Database: ${CHROMA_DATABASE:?Set CHROMA_DATABASE in .env}
+      Chroma__TimeoutSeconds: ${CHROMA_TIMEOUT_SECONDS:?Set CHROMA_TIMEOUT_SECONDS in .env}
+      Mcp__Finance__Enabled: ${FINANCE_MCP_ENABLED:?Set FINANCE_MCP_ENABLED in .env}
+      Mcp__Finance__BaseUrl: ${FINANCE_MCP_BASE_URL:?Set FINANCE_MCP_BASE_URL in .env}
+      Mcp__Finance__TimeoutSeconds: ${FINANCE_MCP_TIMEOUT_SECONDS:?Set FINANCE_MCP_TIMEOUT_SECONDS in .env}
+      Mcp__KnowledgeFiles__Enabled: ${KNOWLEDGE_MCP_ENABLED:?Set KNOWLEDGE_MCP_ENABLED in .env}
+      Mcp__KnowledgeFiles__BaseUrl: ${KNOWLEDGE_MCP_BASE_URL:?Set KNOWLEDGE_MCP_BASE_URL in .env}
+      Mcp__KnowledgeFiles__RootPath: ${KNOWLEDGE_MCP_ROOT_PATH:?Set KNOWLEDGE_MCP_ROOT_PATH in .env}
+      Mcp__KnowledgeFiles__UseLocalFallback: ${KNOWLEDGE_MCP_USE_LOCAL_FALLBACK:?Set KNOWLEDGE_MCP_USE_LOCAL_FALLBACK in .env}
+      Mcp__KnowledgeFiles__TimeoutSeconds: ${KNOWLEDGE_MCP_TIMEOUT_SECONDS:?Set KNOWLEDGE_MCP_TIMEOUT_SECONDS in .env}
+      Frontend__AllowedOrigin: ${FRONTEND_ALLOWED_ORIGIN:?Set FRONTEND_ALLOWED_ORIGIN in .env}
+    ports:
+      - "${CFO_API_PORT:?Set CFO_API_PORT in .env}:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      finance-mcp:
+        condition: service_healthy
+      knowledge-mcp:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+      rag-init:
+        condition: service_completed_successfully
+    networks:
+      - backend
+      - edge
+    restart: unless-stopped
+
+  frontend:
+    image: cfo-agent-ui:local
+    build:
+      context: ./src/cfo-agent-ui
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+    ports:
+      - "${CFO_UI_PORT:?Set CFO_UI_PORT in .env}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - edge
+    restart: unless-stopped
+
+networks:
+  backend:
+    internal: true
+  edge:
 
 volumes:
+  postgres_data:
   chroma_data:

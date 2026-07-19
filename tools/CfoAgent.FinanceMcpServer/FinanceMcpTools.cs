@@ -1,5 +1,5 @@
 using System.ComponentModel;
-using CfoAgent.Api.Data;
+using CfoAgent.FinanceMcpServer.Data;
 using Microsoft.EntityFrameworkCore;
 using ModelContextProtocol.Server;
 

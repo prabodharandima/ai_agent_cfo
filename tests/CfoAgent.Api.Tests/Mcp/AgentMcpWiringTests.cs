@@ -28,12 +28,11 @@ public sealed class AgentMcpWiringTests
     [Fact]
     public async Task SalesAgentUsesFinanceMcpWhenEnabled()
     {
-        await using var database = await TemporaryFinanceDatabase.CreateAsync();
         var mcpSummary = CreateSummary(975m);
         var mcp = new StubFinanceMcpClient { Summary = _ => Task.FromResult(mcpSummary) };
         using var client = CreateMockClient();
         using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateSalesAgent(database, client, services, mcp, financeEnabled: true);
+        var agent = CreateSalesAgent(client, services, mcp);
 
         var result = await agent.GetWeeklySummaryAsync(new AgentRequest("Show this week's sales."), CancellationToken.None);
 
@@ -42,47 +41,49 @@ public sealed class AgentMcpWiringTests
     }
 
     [Fact]
-    public async Task SalesAgentUsesLocalFinanceServiceWhenMcpIsDisabled()
+    public async Task SalesAgentReturnsDependencyFailureWhenMcpIsDisabled()
     {
-        await using var database = await CreateDatabaseWithCurrentSaleAsync(210m);
-        var mcp = new StubFinanceMcpClient { Summary = _ => Task.FromResult(CreateSummary(975m)) };
-        using var client = CreateMockClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateSalesAgent(database, client, services, mcp, financeEnabled: false);
-
-        var result = await agent.GetWeeklySummaryAsync(new AgentRequest("Show this week's sales."), CancellationToken.None);
-
-        Assert.Equal(0, mcp.SummaryCalls);
-        Assert.Equal(210m, Assert.IsType<SalesSummary>(result.StructuredData).NetRevenue);
-    }
-
-    [Fact]
-    public async Task SalesAgentUsesLocalFinanceServiceWhenMcpFails()
-    {
-        await using var database = await CreateDatabaseWithCurrentSaleAsync(320m);
         var mcp = new StubFinanceMcpClient
         {
-            Summary = _ => throw new InvalidOperationException("Finance MCP unavailable.")
+            Summary = _ => throw new McpDependencyException("Finance MCP", McpDependencyFailureKind.Disabled)
         };
         using var client = CreateMockClient();
         using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateSalesAgent(database, client, services, mcp, financeEnabled: true);
+        var agent = CreateSalesAgent(client, services, mcp);
 
-        var result = await agent.GetWeeklySummaryAsync(new AgentRequest("Show this week's sales."), CancellationToken.None);
+        var exception = await Assert.ThrowsAsync<McpDependencyException>(() =>
+            agent.GetWeeklySummaryAsync(new AgentRequest("Show this week's sales."), CancellationToken.None));
 
+        Assert.Equal(McpDependencyFailureKind.Disabled, exception.FailureKind);
         Assert.Equal(1, mcp.SummaryCalls);
-        Assert.Equal(320m, Assert.IsType<SalesSummary>(result.StructuredData).NetRevenue);
+    }
+
+    [Fact]
+    public async Task SalesAgentReturnsDependencyFailureWhenMcpFails()
+    {
+        var mcp = new StubFinanceMcpClient
+        {
+            Summary = _ => throw new McpDependencyException("Finance MCP", McpDependencyFailureKind.Unavailable)
+        };
+        using var client = CreateMockClient();
+        using var services = new ServiceCollection().BuildServiceProvider();
+        var agent = CreateSalesAgent(client, services, mcp);
+
+        var exception = await Assert.ThrowsAsync<McpDependencyException>(() =>
+            agent.GetWeeklySummaryAsync(new AgentRequest("Show this week's sales."), CancellationToken.None));
+
+        Assert.Equal(McpDependencyFailureKind.Unavailable, exception.FailureKind);
+        Assert.Equal(1, mcp.SummaryCalls);
     }
 
     [Fact]
     public async Task ForecastingAgentUsesMcpHistoricalDataWhenEnabled()
     {
-        await using var database = await TemporaryFinanceDatabase.CreateAsync();
         var historical = CreateHistoricalTotals();
         var mcp = new StubFinanceMcpClient { Historical = _ => Task.FromResult(historical) };
         using var client = CreateMockClient();
         using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateForecastingAgent(database, client, services, mcp, financeEnabled: true);
+        var agent = CreateForecastingAgent(client, services, mcp);
 
         var result = await agent.GetForecastAsync(new AgentRequest("Forecast sales."), CancellationToken.None);
 
@@ -95,11 +96,10 @@ public sealed class AgentMcpWiringTests
     [Fact]
     public async Task ForecastingAgentKeepsCalculationsInDeterministicCodeBeforeMockFormatting()
     {
-        await using var database = await TemporaryFinanceDatabase.CreateAsync();
         var mcp = new StubFinanceMcpClient { Historical = _ => Task.FromResult(CreateHistoricalTotals()) };
         using var client = CreateMockClient();
         using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateForecastingAgent(database, client, services, mcp, financeEnabled: true);
+        var agent = CreateForecastingAgent(client, services, mcp);
 
         var result = await agent.GetForecastAsync(new AgentRequest("Forecast sales."), CancellationToken.None);
 
@@ -144,7 +144,6 @@ public sealed class AgentMcpWiringTests
     [Fact]
     public async Task CallerCancellationIsPropagatedWithoutFinanceFallback()
     {
-        await using var database = await CreateDatabaseWithCurrentSaleAsync(450m);
         var mcp = new StubFinanceMcpClient
         {
             Summary = async token =>
@@ -155,7 +154,7 @@ public sealed class AgentMcpWiringTests
         };
         using var client = CreateMockClient();
         using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateSalesAgent(database, client, services, mcp, financeEnabled: true);
+        var agent = CreateSalesAgent(client, services, mcp);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 
@@ -168,12 +167,11 @@ public sealed class AgentMcpWiringTests
     [Fact]
     public async Task FinancialAgentsGiveMockLlmOnlyPrecalculatedStructuredValues()
     {
-        await using var database = await TemporaryFinanceDatabase.CreateAsync();
         var mcpSummary = CreateSummary(1234m);
         var mcp = new StubFinanceMcpClient { Summary = _ => Task.FromResult(mcpSummary) };
         using var client = CreateMockClient();
         using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateSalesAgent(database, client, services, mcp, financeEnabled: true);
+        var agent = CreateSalesAgent(client, services, mcp);
 
         var result = await agent.GetWeeklySummaryAsync(new AgentRequest("Show this week's sales."), CancellationToken.None);
 
@@ -182,33 +180,24 @@ public sealed class AgentMcpWiringTests
     }
 
     private static SalesAnalysisAgent CreateSalesAgent(
-        TemporaryFinanceDatabase database,
         MockChatClient client,
         IServiceProvider services,
-        IFinanceMcpClient mcp,
-        bool financeEnabled)
+        IFinanceMcpClient mcp)
     {
-        var sales = new SalesAnalysisService(database.Context, Clock);
         return new SalesAnalysisAgent(
-            sales,
             new CfoAgentFramework(client, NullLoggerFactory.Instance, services),
-            mcp,
-            CreateFinanceFallback(financeEnabled));
+            mcp);
     }
 
     private static ForecastingAgent CreateForecastingAgent(
-        TemporaryFinanceDatabase database,
         MockChatClient client,
         IServiceProvider services,
-        IFinanceMcpClient mcp,
-        bool financeEnabled)
+        IFinanceMcpClient mcp)
     {
-        var sales = new SalesAnalysisService(database.Context, Clock);
         return new ForecastingAgent(
-            new SalesForecastingService(sales, Clock),
+            new SalesForecastingService(),
             new CfoAgentFramework(client, NullLoggerFactory.Instance, services),
-            mcp,
-            CreateFinanceFallback(financeEnabled));
+            mcp);
     }
 
     private static FinancialKnowledgeAgent CreateKnowledgeAgent(
@@ -242,26 +231,6 @@ public sealed class AgentMcpWiringTests
             new CfoAgentFramework(client, NullLoggerFactory.Instance, services),
             ragOptions,
             knowledgeEnabled ? fileMcp : null);
-    }
-
-    private static FinanceMcpFallback CreateFinanceFallback(bool enabled) => new(
-        Options.Create(CreateMcpOptions(financeEnabled: enabled, knowledgeEnabled: false)),
-        NullLogger<FinanceMcpFallback>.Instance);
-
-    private static McpOptions CreateMcpOptions(bool financeEnabled, bool knowledgeEnabled) => new()
-    {
-        UseLocalFallback = true,
-        Finance = new FinanceMcpOptions { Enabled = financeEnabled, ServerProjectPath = "unused", TimeoutSeconds = 1 },
-        KnowledgeFiles = new KnowledgeFileMcpOptions { Enabled = knowledgeEnabled, RootPath = "unused", TimeoutSeconds = 1 }
-    };
-
-    private static async Task<TemporaryFinanceDatabase> CreateDatabaseWithCurrentSaleAsync(decimal revenue)
-    {
-        var database = await TemporaryFinanceDatabase.CreateAsync();
-        var product = await database.AddProductAsync("FIN-001", "Ledger Pro");
-        database.AddSale(product, "CURRENT", DemoDate, 1, revenue, 0m, 40m);
-        await database.SaveChangesAsync();
-        return database;
     }
 
     private static SalesSummary CreateSummary(decimal revenue) => new(

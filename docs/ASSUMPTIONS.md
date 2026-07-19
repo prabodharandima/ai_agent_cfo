@@ -1,10 +1,8 @@
 # MVP Assumptions
 
-- The project is a local, two-day interview MVP focused on five CEO finance questions rather than a production accounting system.
-- The backend will remain one ASP.NET Core `net10.0` monolith. The four required agents remain in process.
-- The only AI provider is a deterministic offline Mock LLM. No API key, cloud model, or real provider is required or permitted.
-- Financial metrics and forecasts are deterministic C# or SQL outputs. The Mock LLM is limited to classification and executive wording around verified data.
-- SQLite will hold structured finance data and ChromaDB will hold only indexed Markdown knowledge documents.
-- Sale dates are stored as `DateOnly` values using EF Core's SQLite date-only text mapping; they have no time-of-day or timezone component.
-- The local developer environment provides the .NET 10 SDK. Docker, Node.js, and npm will be needed only by later tasks that introduce ChromaDB and the React frontend.
-- Scope remains intentionally small: no authentication, user management, microservices, distributed systems, advanced forecasting, or production deployment are included.
+- The project remains a local interview MVP with one ASP.NET Core business monolith and four in-process agents.
+- Finance MCP exclusively owns PostgreSQL, migrations, deterministic seeding, and finance SQL. The API does not retain finance persistence or a Finance fallback.
+- Finance and Knowledge File MCP services use internal Streamable HTTP; PostgreSQL and MCP ports are not published.
+- ChromaDB stores only indexed Markdown knowledge chunks and citation metadata. It remains the semantic retrieval system.
+- Finance values and forecasts remain deterministic C# or SQL results. Mock is the default offline provider; optional Ollama is not a calculation authority.
+- Knowledge local fallback is Development-only and explicit. Container deployments disable it and mount `data/knowledge` read-only.

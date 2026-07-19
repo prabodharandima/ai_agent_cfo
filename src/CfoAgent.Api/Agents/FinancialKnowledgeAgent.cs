@@ -12,9 +12,13 @@ public sealed class FinancialKnowledgeAgent(
     FinancialKnowledgeRetrievalService retrievalService,
     CfoAgentFramework agentFramework,
     IOptions<RagOptions> options,
-    IKnowledgeFileMcpClient? knowledgeFileMcpClient = null)
+    IKnowledgeFileMcpClient? knowledgeFileMcpClient = null,
+    IOptions<McpOptions>? mcpOptions = null)
 {
     private readonly RagOptions _options = options.Value;
+    private readonly bool _knowledgeFileAccessEnabled = mcpOptions is null
+        ? knowledgeFileMcpClient is not null
+        : mcpOptions.Value.KnowledgeFiles.Enabled || mcpOptions.Value.KnowledgeFiles.UseLocalFallback;
 
     public async Task<AgentResult> AnswerAsync(
         AgentRequest request,
@@ -74,7 +78,7 @@ public sealed class FinancialKnowledgeAgent(
         FinancialKnowledgeQuery query,
         CancellationToken cancellationToken)
     {
-        if (knowledgeFileMcpClient is not null)
+        if (_knowledgeFileAccessEnabled && knowledgeFileMcpClient is not null)
         {
             await knowledgeFileMcpClient.ListFilesAsync(cancellationToken);
         }

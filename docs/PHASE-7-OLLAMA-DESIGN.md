@@ -1,5 +1,7 @@
 # Phase 7 Ollama Discovery and Design
 
+> Historical design record: its SQLite/stdio deployment assumptions were superseded by Phase 8. The current container and host-Ollama behavior is documented in [PHASE-8-RESULTS.md](PHASE-8-RESULTS.md).
+
 ## 1. Status and scope
 
 This document is the output of `TASK-CFO-P7-001`. It describes the current repository and proposes the smallest compatible design for an optional local Ollama provider using `llama3.2:3b`.

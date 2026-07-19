@@ -1,0 +1,33 @@
+{
+  "phase": 8,
+  "name": "Containerized MCP and PostgreSQL Refactor",
+  "task_count": 12,
+  "decisions": {
+    "mcp_containers": 2,
+    "database": "PostgreSQL",
+    "database_owner": "Finance MCP only",
+    "finance_fallback": false,
+    "knowledge_fallback": "development configurable",
+    "transport": "Streamable HTTP preferred",
+    "frontend_containerized": true,
+    "ollama": "Windows host",
+    "mcp_auth": false,
+    "mcp_ports": "internal only"
+  },
+  "files": [
+    "PHASE-8-EXECUTION-ORDER.md",
+    "README-PHASE-8.md",
+    "TASK-CFO-P8-001-architecture-discovery-and-migration-design.md",
+    "TASK-CFO-P8-002-contract-freeze-and-baseline-gate.md",
+    "TASK-CFO-P8-003-move-finance-ownership-to-finance-mcp.md",
+    "TASK-CFO-P8-004-postgresql-migrations-and-seeding.md",
+    "TASK-CFO-P8-005-finance-mcp-streamable-http-host.md",
+    "TASK-CFO-P8-006-knowledge-mcp-streamable-http-host.md",
+    "TASK-CFO-P8-007-api-http-mcp-clients-and-failure-policy.md",
+    "TASK-CFO-P8-008-remove-finance-persistence-from-api.md",
+    "TASK-CFO-P8-009-backend-containers-and-compose.md",
+    "TASK-CFO-P8-010-container-integration-and-resilience-tests.md",
+    "TASK-CFO-P8-011-frontend-container-and-full-deployment.md",
+    "TASK-CFO-P8-012-documentation-cleanup-and-phase-gate.md"
+  ]
+}

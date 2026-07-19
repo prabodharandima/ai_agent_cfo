@@ -1,5 +1,7 @@
 # Phase 7 Results: Optional Local Ollama Provider
 
+> Historical record: the described SQLite/stdio runtime baseline was superseded in Phase 8. See [PHASE-8-RESULTS.md](PHASE-8-RESULTS.md).
+
 ## Status
 
 Passed on 2026-07-18. Phase 7 adds an optional local Ollama chat provider while preserving the default deterministic Mock provider, the four in-process agents, deterministic finance calculations, ChromaDB retrieval, deterministic embeddings, and both MCP integrations.

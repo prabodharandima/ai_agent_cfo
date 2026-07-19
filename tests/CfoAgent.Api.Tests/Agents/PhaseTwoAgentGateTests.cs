@@ -4,9 +4,9 @@ using CfoAgent.Api.Agents;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
 using CfoAgent.Api.Configuration;
-using CfoAgent.Api.Data.Seed;
 using CfoAgent.Api.Features.Forecasting;
 using CfoAgent.Api.Features.Sales;
+using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Tests.Finance;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -14,18 +14,17 @@ using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Tests.Agents;
 
-public class PhaseTwoAgentGateTests
+public sealed class PhaseTwoAgentGateTests
 {
     private static readonly DateOnly DemoDate = new(2026, 7, 15);
     private static readonly TimeProvider Clock = new FixedTimeProvider(DemoDate);
 
     [Fact]
-    public async Task SalesAgentUsesSeededDataAndIncludesTheVerifiedPayloadInItsAnswer()
+    public async Task SalesAgentUsesMcpResultsAndIncludesTheVerifiedPayloadInItsAnswer()
     {
-        await using var database = await CreateSeededDatabaseAsync();
         using var client = CreateClient();
         using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateSalesAgent(database, client, services);
+        var agent = CreateSalesAgent(client, services, new FakeFinanceMcpClient());
         var request = new AgentRequest("Give me this week's sales summary.");
 
         var summary = await agent.GetWeeklySummaryAsync(request, CancellationToken.None);
@@ -42,12 +41,11 @@ public class PhaseTwoAgentGateTests
     }
 
     [Fact]
-    public async Task ForecastAgentReturnsSeededForecastAssumptionsAndVerifiedPayload()
+    public async Task ForecastAgentReturnsVerifiedMcpHistoricalInputsAndDeterministicPayload()
     {
-        await using var database = await CreateSeededDatabaseAsync();
         using var client = CreateClient();
         using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateForecastingAgent(database, client, services);
+        var agent = CreateForecastingAgent(client, services, new FakeFinanceMcpClient());
 
         var result = await agent.GetForecastAsync(new AgentRequest("Give me the sales forecast."), CancellationToken.None);
 
@@ -63,10 +61,10 @@ public class PhaseTwoAgentGateTests
     [Fact]
     public async Task ForecastAgentReturnsInsufficientDataWarningsWithoutInventingValues()
     {
-        await using var database = await TemporaryFinanceDatabase.CreateAsync();
         using var client = CreateClient();
         using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateForecastingAgent(database, client, services);
+        var mcp = new FakeFinanceMcpClient { Historical = new HistoricalYearlySalesResult([], Array.Empty<string>()) };
+        var agent = CreateForecastingAgent(client, services, mcp);
 
         var result = await agent.GetForecastAsync(new AgentRequest("Give me the sales forecast."), CancellationToken.None);
 
@@ -79,12 +77,11 @@ public class PhaseTwoAgentGateTests
     [Fact]
     public async Task SalesAgentPropagatesCancellationFromTheMockClient()
     {
-        await using var database = await CreateSeededDatabaseAsync();
         using var client = CreateClient(simulatedDelayMilliseconds: 5_000);
         using var services = new ServiceCollection().BuildServiceProvider();
         using var cancellationSource = new CancellationTokenSource();
         cancellationSource.CancelAfter(TimeSpan.FromMilliseconds(25));
-        var agent = CreateSalesAgent(database, client, services);
+        var agent = CreateSalesAgent(client, services, new FakeFinanceMcpClient());
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             agent.GetWeeklySummaryAsync(new AgentRequest("Give me this week's sales summary."), cancellationSource.Token));
@@ -93,10 +90,9 @@ public class PhaseTwoAgentGateTests
     [Fact]
     public async Task ForecastAgentWrapsSimulatedMockFailureAsAControlledAgentError()
     {
-        await using var database = await CreateSeededDatabaseAsync();
         using var client = CreateClient(simulateFailure: true);
         using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateForecastingAgent(database, client, services);
+        var agent = CreateForecastingAgent(client, services, new FakeFinanceMcpClient());
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             agent.GetForecastAsync(new AgentRequest("Give me the sales forecast."), CancellationToken.None));
@@ -105,26 +101,11 @@ public class PhaseTwoAgentGateTests
         Assert.IsType<InvalidOperationException>(exception.InnerException);
     }
 
-    private static async Task<TemporaryFinanceDatabase> CreateSeededDatabaseAsync()
-    {
-        var database = await TemporaryFinanceDatabase.CreateAsync();
-        var seeder = new DevelopmentFinanceSeeder(database.Context, Options.Create(new FinanceOptions { DemoDate = DemoDate }));
-        await seeder.SeedAsync(CancellationToken.None);
-        return database;
-    }
+    private static SalesAnalysisAgent CreateSalesAgent(MockChatClient client, IServiceProvider services, IFinanceMcpClient mcp) =>
+        new(new CfoAgentFramework(client, NullLoggerFactory.Instance, services), mcp);
 
-    private static SalesAnalysisAgent CreateSalesAgent(TemporaryFinanceDatabase database, MockChatClient client, IServiceProvider services)
-    {
-        var analysisService = new SalesAnalysisService(database.Context, Clock);
-        return new SalesAnalysisAgent(analysisService, new CfoAgentFramework(client, NullLoggerFactory.Instance, services));
-    }
-
-    private static ForecastingAgent CreateForecastingAgent(TemporaryFinanceDatabase database, MockChatClient client, IServiceProvider services)
-    {
-        var analysisService = new SalesAnalysisService(database.Context, Clock);
-        var forecastingService = new SalesForecastingService(analysisService, Clock);
-        return new ForecastingAgent(forecastingService, new CfoAgentFramework(client, NullLoggerFactory.Instance, services));
-    }
+    private static ForecastingAgent CreateForecastingAgent(MockChatClient client, IServiceProvider services, IFinanceMcpClient mcp) =>
+        new(new SalesForecastingService(), new CfoAgentFramework(client, NullLoggerFactory.Instance, services), mcp);
 
     private static MockChatClient CreateClient(int simulatedDelayMilliseconds = 0, bool simulateFailure = false) => new(Options.Create(new AiOptions
     {
@@ -138,5 +119,23 @@ public class PhaseTwoAgentGateTests
     {
         Assert.NotNull(result.StructuredData);
         Assert.Contains(JsonSerializer.Serialize(result.StructuredData), result.Answer, StringComparison.Ordinal);
+    }
+
+    private sealed class FakeFinanceMcpClient : IFinanceMcpClient
+    {
+        private static readonly SalesPeriod CurrentPeriod = new(new DateOnly(2026, 7, 13), DemoDate);
+        private static readonly SalesPeriod PreviousPeriod = new(new DateOnly(2026, 7, 6), new DateOnly(2026, 7, 12));
+
+        public HistoricalYearlySalesResult Historical { get; init; } = new(
+            [new(2021, 100m), new(2022, 200m), new(2023, 300m), new(2024, 400m), new(2025, 500m)],
+            Array.Empty<string>());
+
+        public Task<SalesSummary> GetCurrentWeekSummaryAsync(CancellationToken cancellationToken) => Task.FromResult(Summary(CurrentPeriod, 1_200m));
+        public Task<WeeklySalesComparison> GetWeekOverWeekComparisonAsync(CancellationToken cancellationToken) => Task.FromResult(new WeeklySalesComparison(Summary(CurrentPeriod, 1_200m), Summary(PreviousPeriod, 1_000m), 200m, 20m, SalesChangeDirection.Increased, Array.Empty<string>()));
+        public Task<TopProductsResult> GetCurrentMonthTopProductsAsync(CancellationToken cancellationToken) => Task.FromResult(new TopProductsResult(new SalesPeriod(new DateOnly(2026, 7, 1), DemoDate), Enumerable.Range(1, 5).Select(index => new TopProduct($"FIN-{index:000}", $"Product {index}", 1m, 100m - index, 50m)).ToArray(), Array.Empty<string>()));
+        public Task<HistoricalYearlySalesResult> GetHistoricalYearlyTotalsAsync(CancellationToken cancellationToken) => Task.FromResult(Historical);
+        public Task<BudgetTargetResult> GetBudgetTargetAsync(int year, int? month, CancellationToken cancellationToken) => Task.FromResult(new BudgetTargetResult(year, month, true, 3_000_000m, 1_000_000m, "budget", Array.Empty<string>()));
+
+        private static SalesSummary Summary(SalesPeriod period, decimal revenue) => new(period, revenue, 400m, revenue - 400m, (revenue - 400m) / revenue * 100m, 4m, 2, revenue / 2m, new TopProduct("FIN-001", "Ledger Pro", 4m, revenue, revenue - 400m), Array.Empty<string>());
     }
 }

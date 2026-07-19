@@ -2,20 +2,11 @@ using CfoAgent.Api.Features.Sales;
 
 namespace CfoAgent.Api.Features.Forecasting;
 
-public sealed class SalesForecastingService(SalesAnalysisService salesAnalysisService, TimeProvider timeProvider)
+public sealed class SalesForecastingService
 {
     private const int MinimumHistoricalYears = 3;
     private const int ForecastYears = 5;
     private const decimal ScenarioAdjustment = 0.10m;
-
-    public async Task<SalesForecastResult> ForecastAsync(CancellationToken cancellationToken)
-    {
-        var historical = await salesAnalysisService.GetHistoricalYearlyTotalsAsync(cancellationToken);
-        return Forecast(historical);
-    }
-
-    public Task<HistoricalYearlySalesResult> GetHistoricalYearlyTotalsAsync(CancellationToken cancellationToken) =>
-        salesAnalysisService.GetHistoricalYearlyTotalsAsync(cancellationToken);
 
     public SalesForecastResult Forecast(HistoricalYearlySalesResult historical)
     {
@@ -40,7 +31,7 @@ public sealed class SalesForecastingService(SalesAnalysisService salesAnalysisSe
         }
 
         var (intercept, slope) = CalculateRegression(historical.Totals);
-        var firstForecastYear = timeProvider.GetLocalNow().Year;
+        var firstForecastYear = historical.Totals[^1].Year + 1;
         var forecasts = Enumerable.Range(0, ForecastYears)
             .Select(offset =>
             {

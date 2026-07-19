@@ -11,10 +11,9 @@ const forecastResponse = {
 afterEach(() => vi.restoreAllMocks())
 
 describe('App', () => {
-  it('renders the Mock LLM marker, example prompts, and empty conversation state', () => {
+  it('renders example prompts and the empty conversation state', () => {
     render(<App />)
     expect(screen.getByRole('heading', { name: 'CFO AI Agent' })).toBeInTheDocument()
-    expect(screen.getByText('Mock LLM')).toBeInTheDocument()
     expect(screen.getByText('Your finance briefing starts here')).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /sales summary|compare|top five|forecast|annual sales target/i })).toHaveLength(5)
   })

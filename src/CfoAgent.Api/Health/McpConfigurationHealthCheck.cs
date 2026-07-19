@@ -5,41 +5,56 @@ using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Health;
 
-public sealed class McpConfigurationHealthCheck(IOptions<McpOptions> options, IHostEnvironment environment) : IHealthCheck
+public sealed class McpConfigurationHealthCheck(
+    IOptions<McpOptions> options,
+    IFinanceMcpRemoteClient financeClient,
+    IKnowledgeFileMcpClient knowledgeClient) : IHealthCheck
 {
-    public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
+    public async Task<HealthCheckResult> CheckHealthAsync(
+        HealthCheckContext context,
+        CancellationToken cancellationToken = default)
     {
-        var configuration = options.Value;
         var problems = new List<string>();
 
-        if (configuration.Finance.Enabled)
+        if (!options.Value.Finance.Enabled)
         {
-            var projectPath = Path.GetFullPath(configuration.Finance.ServerProjectPath, environment.ContentRootPath);
-            if (!File.Exists(Path.Combine(projectPath, "CfoAgent.FinanceMcpServer.csproj")))
-            {
-                problems.Add("Finance MCP project is unavailable.");
-            }
+            problems.Add("Finance MCP is disabled.");
         }
-
-        if (configuration.KnowledgeFiles.Enabled)
+        else
         {
             try
             {
-                var knowledgeRoot = KnowledgeFilePathResolver.ResolveRoot(configuration, environment);
-                var serverProject = KnowledgeFilePathResolver.ResolveServerProject(environment);
-                if (!Directory.Exists(knowledgeRoot) || !Directory.Exists(serverProject))
-                {
-                    problems.Add("Knowledge file MCP configuration is unavailable.");
-                }
+                await financeClient.DiscoverToolsAsync(cancellationToken);
             }
-            catch (Exception exception) when (exception is DirectoryNotFoundException or FileNotFoundException or InvalidOperationException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                problems.Add("Knowledge file MCP configuration is unavailable.");
+                throw;
+            }
+            catch (McpDependencyException)
+            {
+                problems.Add("Finance MCP is unavailable.");
             }
         }
 
-        return Task.FromResult(problems.Count == 0
-            ? HealthCheckResult.Healthy("Configured MCP integrations are ready for lazy startup.")
-            : HealthCheckResult.Unhealthy(string.Join(' ', problems)));
+        var knowledge = options.Value.KnowledgeFiles;
+        if (knowledge.Enabled || knowledge.UseLocalFallback)
+        {
+            try
+            {
+                await knowledgeClient.ListFilesAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (exception is McpDependencyException or IOException or InvalidOperationException)
+            {
+                problems.Add("Knowledge File MCP is unavailable.");
+            }
+        }
+
+        return problems.Count == 0
+            ? HealthCheckResult.Healthy("Configured MCP dependencies are ready.")
+            : HealthCheckResult.Unhealthy(string.Join(' ', problems));
     }
 }
