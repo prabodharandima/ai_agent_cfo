@@ -1,11 +1,16 @@
 .git
+.env
 .github
 .vs
 .vscode
 **/bin
 **/obj
 **/node_modules
+**/dist
 **/TestResults
+**/test-results
+**/playwright-report
+**/coverage
 artifacts
 data
 docs
