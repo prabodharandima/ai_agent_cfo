@@ -187,7 +187,7 @@ On success, the public response contains the prose answer, a stable response typ
 
 ### LLM abstraction
 
-Application code depends on `Microsoft.Extensions.AI.IChatClient`. `OllamaChatClient` is the runtime implementation. Tests inject test-local `IChatClient` doubles, and agents do not contain Ollama transport code.
+Application code depends on `Microsoft.Extensions.AI.IChatClient`. At startup, the composition root reads `AI:Provider`, creates a provider-neutral `AiProviderDescriptor`, and registers the matching runtime client. Ollama is the only registered provider today, implemented by `OllamaChatClient`. Tests inject test-local `IChatClient` doubles, and agents do not contain provider transport code.
 
 ### MCP adapter and typed client
 
@@ -789,11 +789,12 @@ Ingestion catches non-cancellation errors per document and records the source pa
 
 ## 14. LLM provider
 
-`OllamaChatClient` wraps `OllamaApiClient` from OllamaSharp.
+`OllamaChatClient` wraps `OllamaApiClient` from OllamaSharp. This is provider-specific infrastructure, not an application-level dependency.
 
 - Ollama runs on the Windows host, outside Docker.
 - The API container reaches it at `http://host.docker.internal:11434` by default.
-- `AI:Model` selects the model, normally `llama3.2:3b`; no provider-selection setting exists.
+- `AI:Provider` selects the configured provider and currently must be `Ollama`.
+- `AI:Ollama:Model` selects the model, normally `llama3.2:3b`.
 - The wrapper enforces configured model ID, temperature, context length, output-token limit, and timeout.
 - Caller cancellation remains cancellation.
 - Timeout, unavailable endpoint, malformed response, and empty response become typed provider failures.
@@ -814,8 +815,8 @@ flowchart TD
     Failure[Operation fails] --> Type{Failure type}
     Type -->|Invalid request| E400[400 validation Problem Details]
     Type -->|MCP or Chroma dependency| E503[503 sanitized dependency response]
-    Type -->|Ollama unavailable or invalid| O503[503 provider response]
-    Type -->|Ollama or internal timeout| E504[504 timeout response]
+    Type -->|AI provider unavailable or invalid| O503[503 provider response]
+    Type -->|AI provider or internal timeout| E504[504 timeout response]
     Type -->|Unsupported intent| OK[200 supported-scope answer]
     Type -->|Caller cancellation| Cancel[Propagate cancellation]
     Type -->|Unexpected| E500[500 sanitized response]
@@ -830,8 +831,8 @@ flowchart TD
 | Invalid MCP arguments | Server/SDK rejection becomes controlled invalid-response dependency failure |
 | ChromaDB unavailable | `ChromaDependencyException` through `VectorSearchDependencyException`, HTTP 503 |
 | No relevant knowledge | Successful Knowledge result with a fixed insufficient-knowledge answer, not 503 |
-| Ollama unavailable or invalid | Sanitized provider HTTP 503 |
-| Ollama timeout | HTTP 504 |
+| AI provider unavailable or invalid | Sanitized provider HTTP 503 |
+| AI provider timeout | HTTP 504 |
 | Caller cancellation | Propagated; not converted to fallback or 503 |
 
 MCP adapter operations use a linked configured timeout. On timeout or transport failure, the adapter disposes the connection and clears its tool cache so the next request reconnects.
@@ -846,12 +847,13 @@ The local and container defaults are intentionally different. Local `appsettings
 
 | Setting | Purpose | Example | Used by | Required behavior |
 |---|---|---|---|---|
-| `AI:Model` / `AI_MODEL` | Ollama model name | `llama3.2:3b` | Chat response, provider | Nonblank |
-| `AI:BaseUrl` / `OLLAMA_BASE_URL` | Ollama endpoint | `http://host.docker.internal:11434` | Ollama HTTP client | Absolute HTTP URL |
-| `AI:TimeoutSeconds` | LLM operation timeout | `120` | Ollama wrapper/client | 1 through 600 |
-| `AI:Temperature` | Ollama sampling variability | `0` | Ollama request | 0 through 2 |
-| `AI:ContextLength` | Ollama context size | `4096` | Ollama request | 1,024 through 32,768 |
-| `AI:MaxOutputTokens` | Maximum completion size | `512` | Ollama request | 1 through 1,024 and below context length |
+| `AI:Provider` / `AI_PROVIDER` | Selected registered provider | `Ollama` | Composition root, response metadata | Required; currently `Ollama` only |
+| `AI:Ollama:Model` / `OLLAMA_MODEL` | Ollama model name | `llama3.2:3b` | Ollama adapter and dynamic chat metadata | Nonblank |
+| `AI:Ollama:BaseUrl` / `OLLAMA_BASE_URL` | Ollama endpoint | `http://host.docker.internal:11434` | Ollama HTTP client | Absolute HTTP URL |
+| `AI:Ollama:TimeoutSeconds` / `OLLAMA_TIMEOUT_SECONDS` | LLM operation timeout | `120` | Ollama adapter/client | 1 through 600 |
+| `AI:Ollama:Temperature` / `OLLAMA_TEMPERATURE` | Ollama sampling variability | `0` | Ollama request | 0 through 2 |
+| `AI:Ollama:ContextLength` / `OLLAMA_CONTEXT_LENGTH` | Ollama context size | `4096` | Ollama request | 1,024 through 32,768 |
+| `AI:Ollama:MaxOutputTokens` / `OLLAMA_MAX_OUTPUT_TOKENS` | Maximum completion size | `512` | Ollama request | 1 through 1,024 and below context length |
 | `Mcp:Finance:Enabled` | Enable required Finance MCP | `true` | Finance adapter/readiness | Finance readiness is unhealthy when false |
 | `Mcp:Finance:BaseUrl` / `FINANCE_MCP_BASE_URL` | Finance MCP service address | `http://finance-mcp:8080` | Finance keyed adapter | Absolute HTTP URL when enabled |
 | `Mcp:Finance:TimeoutSeconds` | Finance MCP timeout | `10` | Finance keyed adapter | Positive |
@@ -957,7 +959,7 @@ Fully implemented for the bounded MVP. One `CfoOrchestratorAgent` classifies and
 
 Implemented pragmatically around external boundaries:
 
-- `IChatClient` separates agents from Ollama details and provides a test seam.
+- `IChatClient` separates agents from provider details and provides a test seam.
 - `IFinanceMcpClient` separates agents from MCP JSON/transport.
 - `IMcpToolAdapter` separates typed clients from the MCP SDK.
 - `IFinancialKnowledgeSearch` separates the knowledge agent from ChromaDB.
@@ -966,7 +968,7 @@ This is not a physically separated multi-project Clean Architecture implementati
 
 ### LLM registration
 
-`Program.cs` registers one `OllamaChatClient` as the runtime `IChatClient`. Unit tests replace that registration with test-project doubles; production has no provider selector or fallback provider.
+`Program.cs` selects the registered `IChatClient` from `AI:Provider` at the composition root and exposes only `AiProviderDescriptor` outside that boundary. Ollama is the one supported selection today. Unit tests replace `IChatClient` or the descriptor with test-project doubles; agents and endpoints have no provider switch or fallback provider.
 
 ### Dependency Injection
 

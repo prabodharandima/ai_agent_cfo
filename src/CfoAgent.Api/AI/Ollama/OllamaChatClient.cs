@@ -1,7 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using CfoAgent.Api.Configuration;
+using CfoAgent.Api.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using OllamaSharp;
@@ -13,18 +13,21 @@ namespace CfoAgent.Api.AI.Ollama;
 public sealed class OllamaChatClient : IChatClient
 {
     private readonly IChatClient transport;
-    private readonly AiOptions options;
+    private readonly OllamaOptions options;
+    private readonly AiProviderDescriptor provider;
     private readonly ILogger<OllamaChatClient> logger;
 
     public OllamaChatClient(
         IChatClient transport,
-        AiOptions options,
+        OllamaOptions options,
+        AiProviderDescriptor provider,
         ILogger<OllamaChatClient>? logger = null)
     {
         this.transport = transport;
         this.options = options;
+        this.provider = provider;
         this.logger = logger ?? NullLogger<OllamaChatClient>.Instance;
-        Metadata = new ChatClientMetadata("Ollama", new Uri(options.BaseUrl), options.Model);
+        Metadata = new ChatClientMetadata(provider.ProviderName, new Uri(options.BaseUrl), provider.ModelName);
     }
 
     public ChatClientMetadata Metadata { get; }
@@ -50,7 +53,7 @@ public sealed class OllamaChatClient : IChatClient
                 .Any();
             if (string.IsNullOrWhiteSpace(response.Text) && !hasFunctionCall)
             {
-                throw new OllamaProviderException(OllamaFailureKind.InvalidResponse);
+                throw new AiProviderException(provider.ProviderName, AiProviderFailureKind.InvalidResponse);
             }
 
             LogOutcome(stopwatch, "Success", "None");
@@ -64,29 +67,29 @@ public sealed class OllamaChatClient : IChatClient
         catch (OperationCanceledException)
         {
             LogOutcome(stopwatch, "Failure", "Timeout");
-            throw new OllamaProviderException(OllamaFailureKind.Timeout);
+            throw new AiProviderException(provider.ProviderName, AiProviderFailureKind.Timeout);
         }
         catch (HttpRequestException)
         {
             LogOutcome(stopwatch, "Failure", "Unavailable");
-            throw new OllamaProviderException(OllamaFailureKind.Unavailable);
+            throw new AiProviderException(provider.ProviderName, AiProviderFailureKind.Unavailable);
         }
         catch (JsonException)
         {
             LogOutcome(stopwatch, "Failure", "InvalidResponse");
-            throw new OllamaProviderException(OllamaFailureKind.InvalidResponse);
+            throw new AiProviderException(provider.ProviderName, AiProviderFailureKind.InvalidResponse);
         }
         catch (ResponseError)
         {
             LogOutcome(stopwatch, "Failure", "Unavailable");
-            throw new OllamaProviderException(OllamaFailureKind.Unavailable);
+            throw new AiProviderException(provider.ProviderName, AiProviderFailureKind.Unavailable);
         }
         catch (OllamaException)
         {
             LogOutcome(stopwatch, "Failure", "InvalidResponse");
-            throw new OllamaProviderException(OllamaFailureKind.InvalidResponse);
+            throw new AiProviderException(provider.ProviderName, AiProviderFailureKind.InvalidResponse);
         }
-        catch (OllamaProviderException exception)
+        catch (AiProviderException exception)
         {
             LogOutcome(stopwatch, "Failure", exception.FailureKind.ToString());
             throw;
@@ -119,7 +122,7 @@ public sealed class OllamaChatClient : IChatClient
     private ChatOptions CreateRequestOptions(ChatOptions? requestOptions)
     {
         var boundedOptions = requestOptions?.Clone() ?? new ChatOptions();
-        boundedOptions.ModelId = options.Model;
+        boundedOptions.ModelId = provider.ModelName;
         boundedOptions.Temperature = (float)options.Temperature;
         boundedOptions.MaxOutputTokens = options.MaxOutputTokens;
         boundedOptions.AddOllamaOption(OllamaOption.NumCtx, options.ContextLength);
@@ -129,9 +132,9 @@ public sealed class OllamaChatClient : IChatClient
     private void LogOutcome(Stopwatch stopwatch, string outcome, string failureCategory)
     {
         logger.LogInformation(
-            "Ollama operation completed. Provider: {Provider}; Model: {Model}; Operation: {Operation}; DurationMilliseconds: {DurationMilliseconds}; Outcome: {Outcome}; FailureCategory: {FailureCategory}",
-            "Ollama",
-            options.Model,
+            "AI provider operation completed. Provider: {Provider}; Model: {Model}; Operation: {Operation}; DurationMilliseconds: {DurationMilliseconds}; Outcome: {Outcome}; FailureCategory: {FailureCategory}",
+            provider.ProviderName,
+            provider.ModelName,
             "chat",
             stopwatch.ElapsedMilliseconds,
             outcome,

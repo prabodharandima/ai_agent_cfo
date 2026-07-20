@@ -1,3 +1,4 @@
+using CfoAgent.Api.AI;
 using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents;
@@ -46,14 +47,16 @@ builder.Services.AddOptions<RagOptions>()
 
 builder.Services.AddOptions<AiOptions>()
     .BindConfiguration(AiOptions.SectionName)
-    .Validate(options => !string.IsNullOrWhiteSpace(options.Model), "AI:Model is required.")
-    .Validate(options => Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var uri)
+    .Validate(options => !string.IsNullOrWhiteSpace(options.Provider), "AI:Provider is required.")
+    .Validate(options => string.Equals(options.Provider, "Ollama", StringComparison.OrdinalIgnoreCase), "AI:Provider must name a registered provider. Currently supported: Ollama.")
+    .Validate(options => !string.IsNullOrWhiteSpace(options.Ollama.Model), "AI:Ollama:Model is required.")
+    .Validate(options => Uri.TryCreate(options.Ollama.BaseUrl, UriKind.Absolute, out var uri)
         && (string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)), "AI:BaseUrl must be an absolute HTTP or HTTPS URI.")
-    .Validate(options => options.TimeoutSeconds is > 0 and <= 600, "AI:TimeoutSeconds must be between 1 and 600.")
-    .Validate(options => double.IsFinite(options.Temperature) && options.Temperature is >= 0 and <= 2, "AI:Temperature must be finite and between 0 and 2.")
-    .Validate(options => options.ContextLength is >= 1_024 and <= 32_768, "AI:ContextLength must be between 1024 and 32768.")
-    .Validate(options => options.MaxOutputTokens is >= 1 and <= 1_024 && options.MaxOutputTokens < options.ContextLength, "AI:MaxOutputTokens must be between 1 and 1024 and less than AI:ContextLength.")
+            || string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)), "AI:Ollama:BaseUrl must be an absolute HTTP or HTTPS URI.")
+    .Validate(options => options.Ollama.TimeoutSeconds is > 0 and <= 600, "AI:Ollama:TimeoutSeconds must be between 1 and 600.")
+    .Validate(options => double.IsFinite(options.Ollama.Temperature) && options.Ollama.Temperature is >= 0 and <= 2, "AI:Ollama:Temperature must be finite and between 0 and 2.")
+    .Validate(options => options.Ollama.ContextLength is >= 1_024 and <= 32_768, "AI:Ollama:ContextLength must be between 1024 and 32768.")
+    .Validate(options => options.Ollama.MaxOutputTokens is >= 1 and <= 1_024 && options.Ollama.MaxOutputTokens < options.Ollama.ContextLength, "AI:Ollama:MaxOutputTokens must be between 1 and 1024 and less than AI:Ollama:ContextLength.")
     .ValidateOnStart();
 
 builder.Services.AddOptions<McpOptions>()
@@ -82,21 +85,39 @@ builder.Services.AddScoped<ForecastingAgent>();
 builder.Services.AddScoped<FinancialKnowledgeAgent>();
 builder.Services.AddSingleton<AgentResultComposer>();
 builder.Services.AddScoped<CfoOrchestratorAgent>();
-builder.Services.AddHttpClient(AiOptions.OllamaHttpClientName, (serviceProvider, client) =>
+builder.Services.AddSingleton<OllamaOptions>(serviceProvider =>
+    serviceProvider.GetRequiredService<IOptions<AiOptions>>().Value.Ollama);
+builder.Services.AddSingleton<AiProviderDescriptor>(serviceProvider =>
 {
     var ai = serviceProvider.GetRequiredService<IOptions<AiOptions>>().Value;
-    client.BaseAddress = new Uri(ai.BaseUrl);
-    client.Timeout = TimeSpan.FromSeconds(ai.TimeoutSeconds);
+    return ai.Provider switch
+    {
+        var provider when string.Equals(provider, "Ollama", StringComparison.OrdinalIgnoreCase) =>
+            new AiProviderDescriptor(ai.Provider, ai.Ollama.Model),
+        _ => throw new InvalidOperationException("The configured AI provider is not registered.")
+    };
+});
+builder.Services.AddHttpClient(OllamaOptions.HttpClientName, (serviceProvider, client) =>
+{
+    var ollama = serviceProvider.GetRequiredService<OllamaOptions>();
+    client.BaseAddress = new Uri(ollama.BaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(ollama.TimeoutSeconds);
 });
 builder.Services.AddSingleton<IChatClient>(serviceProvider =>
 {
-    var ai = serviceProvider.GetRequiredService<IOptions<AiOptions>>().Value;
-    var httpClient = serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(AiOptions.OllamaHttpClientName);
-    var transport = (IChatClient)new OllamaApiClient(httpClient, ai.Model);
-    return new OllamaChatClient(
-        transport,
-        ai,
-        serviceProvider.GetRequiredService<ILogger<OllamaChatClient>>());
+    var provider = serviceProvider.GetRequiredService<AiProviderDescriptor>();
+    return provider.ProviderName switch
+    {
+        var providerName when string.Equals(providerName, "Ollama", StringComparison.OrdinalIgnoreCase) =>
+            new OllamaChatClient(
+                (IChatClient)new OllamaApiClient(
+                    serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(OllamaOptions.HttpClientName),
+                    provider.ModelName),
+                serviceProvider.GetRequiredService<OllamaOptions>(),
+                provider,
+                serviceProvider.GetRequiredService<ILogger<OllamaChatClient>>()),
+        _ => throw new InvalidOperationException("The configured AI provider is not registered.")
+    };
 });
 builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>, DeterministicTokenHashEmbeddingGenerator>();
 builder.Services.AddScoped<RagDocumentIngestionService>();
@@ -176,7 +197,7 @@ builder.Services.AddHttpClient<ChromaClient>((serviceProvider, client) =>
 builder.Services.AddHealthChecks()
     .AddCheck<ChromaHealthCheck>("chroma", tags: ["ready"])
     .AddCheck<McpConfigurationHealthCheck>("mcp", tags: ["ready"])
-    .AddCheck<OllamaHealthCheck>("ollama", tags: ["ready"]);
+    .AddCheck<OllamaHealthCheck>("ai-provider", tags: ["ready"]);
 
 var app = builder.Build();
 
@@ -220,17 +241,16 @@ if (app.Environment.IsDevelopment())
     });
 }
 
-app.MapGet("/", (IOptions<ApplicationOptions> applicationOptions, IOptions<AiOptions> aiOptions) =>
+app.MapGet("/", (IOptions<ApplicationOptions> applicationOptions, AiProviderDescriptor aiProvider) =>
 {
     var application = applicationOptions.Value;
-    var ai = aiOptions.Value;
 
     return Results.Ok(new
     {
         application = application.Name,
         demoMode = application.DemoMode,
-        aiProvider = "Ollama",
-        model = ai.Model
+        aiProvider = aiProvider.ProviderName,
+        model = aiProvider.ModelName
     });
 });
 

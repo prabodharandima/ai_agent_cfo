@@ -1,9 +1,8 @@
 using System.Text.Json.Nodes;
+using CfoAgent.Api.AI;
 using CfoAgent.Api.Agents;
 using CfoAgent.Api.Agents.Contracts;
-using CfoAgent.Api.Configuration;
 using Microsoft.AspNetCore.Http.HttpResults;
-using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
 
 namespace CfoAgent.Api.Features.Chat;
@@ -41,7 +40,7 @@ public static class ChatEndpoints
     private static async Task<Results<Ok<ChatResponse>, ValidationProblem, ProblemHttpResult>> HandleAsync(
         ChatRequest? request,
         CfoOrchestratorAgent orchestrator,
-        IOptions<AiOptions> aiOptions,
+        AiProviderDescriptor aiProvider,
         ILoggerFactory loggerFactory,
         HttpContext httpContext)
     {
@@ -64,7 +63,7 @@ public static class ChatEndpoints
         var result = await orchestrator.HandleAsync(
             new AgentRequest(request.Message),
             httpContext.RequestAborted);
-        var model = new ChatModel("Ollama", aiOptions.Value.Model);
+        var model = new ChatModel(aiProvider.ProviderName, aiProvider.ModelName);
 
         return TypedResults.Ok(ChatResponse.FromAgentResult(result, conversationId, model));
     }

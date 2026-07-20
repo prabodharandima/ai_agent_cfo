@@ -48,7 +48,8 @@ Open `.env` and set the values you need. Important settings include:
 
 | Setting | Purpose |
 |---|---|
-| `AI_MODEL` | Locally installed Ollama model, normally `llama3.2:3b` |
+| `AI_PROVIDER` | Selected registered LLM provider; currently `Ollama` |
+| `OLLAMA_MODEL` | Locally installed Ollama model, normally `llama3.2:3b` |
 | `OLLAMA_BASE_URL` | Host address used by API containers; normally `http://host.docker.internal:11434` |
 | `POSTGRES_*` and `FINANCE_DATABASE_CONNECTION_STRING` | Local Finance MCP PostgreSQL database settings |
 | `PGADMIN_DEFAULT_EMAIL` / `PGADMIN_DEFAULT_PASSWORD` | Local pgAdmin sign-in credentials |
@@ -56,10 +57,11 @@ Open `.env` and set the values you need. Important settings include:
 | `FINANCE_MCP_*` / `KNOWLEDGE_MCP_*` | Internal MCP endpoints, enabled flags, and timeouts |
 | `CHROMA_*` / `RAG_*` | ChromaDB and ingestion settings |
 
-The committed `.env.example` configures the default Ollama model:
+The committed `.env.example` selects the current Ollama provider and model:
 
 ```env
-AI_MODEL=llama3.2:3b
+AI_PROVIDER=Ollama
+OLLAMA_MODEL=llama3.2:3b
 ```
 
 For direct `dotnet run` development, .NET does not automatically load `.env`; use `appsettings.json`, user secrets, or normal `AI__...` environment variables instead.
@@ -338,11 +340,12 @@ ollama pull llama3.2:3b
 For local API execution, configure:
 
 ```powershell
-$env:AI__Model = 'llama3.2:3b'
-$env:AI__BaseUrl = 'http://localhost:11434'
+$env:AI__Provider = 'Ollama'
+$env:AI__Ollama__Model = 'llama3.2:3b'
+$env:AI__Ollama__BaseUrl = 'http://localhost:11434'
 ```
 
-For Docker Compose, retain `AI_MODEL=llama3.2:3b` in `.env`, then run `docker compose up -d --force-recreate api`. Containers reach host Ollama through `host.docker.internal`. Ollama is never asked to calculate financial values or replace ChromaDB retrieval. When the application supplies a bounded approved MCP tool set for a Finance operation, Ollama may return one function call from that set; the API still validates the selected tool and canonical deterministic arguments before invocation.
+For Docker Compose, retain `AI_PROVIDER=Ollama` and `OLLAMA_MODEL=llama3.2:3b` in `.env`, then run `docker compose up -d --force-recreate api`. Containers reach host Ollama through `host.docker.internal`. Ollama is never asked to calculate financial values or replace ChromaDB retrieval. When the application supplies a bounded approved MCP tool set for a Finance operation, Ollama may return one function call from that set; the API still validates the selected tool and canonical deterministic arguments before invocation.
 
 ## 13. Stop or reset the application
 

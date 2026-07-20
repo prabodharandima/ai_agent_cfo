@@ -4,7 +4,7 @@
 
 The CFO AI Agent is a local MVP for five CEO finance questions: weekly sales, week-over-week comparison, current-month top products, a five-year forecast, and annual-target assumptions.
 
-`CfoAgent.Api` is the single ASP.NET Core business monolith. It contains the chat API, CFO Orchestrator, Sales Analysis, Forecasting, and Financial Knowledge agents, deterministic forecast calculation, RAG retrieval, Ollama LLM configuration, and error handling. The agents stay in process and do not communicate over HTTP with one another.
+`CfoAgent.Api` is the single ASP.NET Core business monolith. It contains the chat API, CFO Orchestrator, Sales Analysis, Forecasting, and Financial Knowledge agents, deterministic forecast calculation, RAG retrieval, configurable LLM-provider integration, and error handling. The agents stay in process and do not communicate over HTTP with one another.
 
 Two approved hosted MCP services are external integration boundaries, not additional business applications:
 
@@ -19,7 +19,7 @@ Both use the official `ModelContextProtocol` C# SDK over Streamable HTTP on the 
 - Finance MCP loss, timeout, or missing capability is a controlled sanitized dependency failure, normally chat API HTTP 503. Caller cancellation is always propagated rather than translated to a fallback or 503.
 - Knowledge File MCP has a secure local fallback only when explicitly enabled in Development. Containers disable it. ChromaDB remains the semantic retrieval and citation system in every mode.
 - Financial summaries, comparisons, rankings, dates, percentages, and forecast values are deterministic C# and SQL results. An LLM never creates authoritative finance values.
-- `OllamaChatClient` is the only runtime `IChatClient` implementation. It is configured with a local model and base URL, and containers reach the Windows-host endpoint through `host.docker.internal`. No cloud provider is implemented.
+- `IChatClient` is selected at the composition root from `AI:Provider`. Ollama is the only registered provider today: its adapter, options, SDK configuration, and health check stay under `AI/Ollama`. Containers reach its Windows-host endpoint through `host.docker.internal`. No cloud-provider adapter is implemented.
 - Preserve exactly four agents, the approved five Finance MCP tools, and the two Knowledge File MCP tools. The typed Finance MCP client selects only its fixed, configured-approved tool and supplies deterministic canonical arguments; `IChatClient` classifies requests and explains verified results but never selects MCP tools, endpoints, or authoritative finance arguments. Do not add auth, streaming, history, CQRS, MediatR, extra agents, write MCP operations, or microservices beyond the two approved hosted MCP services.
 
 ## Current deployment
@@ -40,7 +40,7 @@ Docker Compose publishes the frontend on `5173` and retains API port `5260` as a
 
 ## Configuration and operations
 
-- `AI:Model` defaults to `llama3.2:3b`; `AI:BaseUrl` configures the local Ollama endpoint. There is no provider-selection setting.
+- `AI:Provider` selects a registered provider and currently must be `Ollama`. `AI:Ollama:Model` defaults to `llama3.2:3b`; `AI:Ollama:BaseUrl` configures the local Ollama endpoint. Do not put provider-specific settings in agents, endpoints, or shared error handling.
 - `Mcp:Finance:BaseUrl` and `Mcp:KnowledgeFiles:BaseUrl` are absolute HTTP URLs. In Compose they are `http://finance-mcp:8080` and `http://knowledge-mcp:8080`.
 - `Mcp:Finance:AllowedToolNames` and `Mcp:KnowledgeFiles:AllowedToolNames` are the explicit MCP approval boundary. The shared adapter discovers tools with the official SDK, caches only approved metadata for its connection, validates each requested operation, and refreshes discovery after reconnect.
 - `Mcp:KnowledgeFiles:UseLocalFallback` is Development-only and is `false` in containers.

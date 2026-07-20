@@ -1,26 +1,28 @@
 using System.Diagnostics;
 using System.Text.Json;
-using CfoAgent.Api.Configuration;
+using CfoAgent.Api.AI;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 
-namespace CfoAgent.Api.Health;
+namespace CfoAgent.Api.AI.Ollama;
 
 public sealed class OllamaHealthCheck : IHealthCheck
 {
     private static readonly TimeSpan MaximumProbeTimeout = TimeSpan.FromSeconds(5);
     private readonly IHttpClientFactory httpClientFactory;
-    private readonly IOptions<AiOptions> aiOptions;
+    private readonly OllamaOptions options;
+    private readonly AiProviderDescriptor provider;
     private readonly ILogger<OllamaHealthCheck> logger;
 
     public OllamaHealthCheck(
         IHttpClientFactory httpClientFactory,
-        IOptions<AiOptions> aiOptions,
+        OllamaOptions options,
+        AiProviderDescriptor provider,
         ILogger<OllamaHealthCheck>? logger = null)
     {
         this.httpClientFactory = httpClientFactory;
-        this.aiOptions = aiOptions;
+        this.options = options;
+        this.provider = provider;
         this.logger = logger ?? NullLogger<OllamaHealthCheck>.Instance;
     }
 
@@ -28,9 +30,7 @@ public sealed class OllamaHealthCheck : IHealthCheck
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
-        var options = aiOptions.Value;
         var stopwatch = Stopwatch.StartNew();
-
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(options.TimeoutSeconds > MaximumProbeTimeout.TotalSeconds
             ? MaximumProbeTimeout
@@ -38,44 +38,44 @@ public sealed class OllamaHealthCheck : IHealthCheck
 
         try
         {
-            var client = httpClientFactory.CreateClient(AiOptions.OllamaHttpClientName);
+            var client = httpClientFactory.CreateClient(OllamaOptions.HttpClientName);
             using var response = await client.GetAsync("api/tags", timeoutSource.Token);
             if (!response.IsSuccessStatusCode)
             {
-                LogOutcome(options, stopwatch, "Failure", "Unavailable");
-                return HealthCheckResult.Unhealthy("Ollama is unavailable.");
+                LogOutcome(stopwatch, "Failure", "Unavailable");
+                return HealthCheckResult.Unhealthy($"{provider.ProviderName} is unavailable.");
             }
 
             await using var responseStream = await response.Content.ReadAsStreamAsync(timeoutSource.Token);
             using var document = await JsonDocument.ParseAsync(responseStream, cancellationToken: timeoutSource.Token);
-            if (!ContainsConfiguredModel(document.RootElement, options.Model))
+            if (!ContainsConfiguredModel(document.RootElement, provider.ModelName))
             {
-                LogOutcome(options, stopwatch, "Failure", "ModelUnavailable");
-                return HealthCheckResult.Unhealthy("Configured Ollama model is unavailable.");
+                LogOutcome(stopwatch, "Failure", "ModelUnavailable");
+                return HealthCheckResult.Unhealthy($"Configured {provider.ProviderName} model is unavailable.");
             }
 
-            LogOutcome(options, stopwatch, "Success", "None");
-            return HealthCheckResult.Healthy("Ollama is ready.");
+            LogOutcome(stopwatch, "Success", "None");
+            return HealthCheckResult.Healthy($"{provider.ProviderName} is ready.");
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            LogOutcome(options, stopwatch, "Cancelled", "CallerCancelled");
+            LogOutcome(stopwatch, "Cancelled", "CallerCancelled");
             throw;
         }
         catch (OperationCanceledException)
         {
-            LogOutcome(options, stopwatch, "Failure", "Timeout");
-            return HealthCheckResult.Unhealthy("Ollama health check timed out.");
+            LogOutcome(stopwatch, "Failure", "Timeout");
+            return HealthCheckResult.Unhealthy($"{provider.ProviderName} health check timed out.");
         }
         catch (HttpRequestException)
         {
-            LogOutcome(options, stopwatch, "Failure", "Unavailable");
-            return HealthCheckResult.Unhealthy("Ollama is unavailable.");
+            LogOutcome(stopwatch, "Failure", "Unavailable");
+            return HealthCheckResult.Unhealthy($"{provider.ProviderName} is unavailable.");
         }
         catch (JsonException)
         {
-            LogOutcome(options, stopwatch, "Failure", "InvalidResponse");
-            return HealthCheckResult.Unhealthy("Ollama health check returned an invalid response.");
+            LogOutcome(stopwatch, "Failure", "InvalidResponse");
+            return HealthCheckResult.Unhealthy($"{provider.ProviderName} health check returned an invalid response.");
         }
     }
 
@@ -92,12 +92,12 @@ public sealed class OllamaHealthCheck : IHealthCheck
             && string.Equals(name.GetString(), model, StringComparison.Ordinal));
     }
 
-    private void LogOutcome(AiOptions options, Stopwatch stopwatch, string outcome, string failureCategory)
+    private void LogOutcome(Stopwatch stopwatch, string outcome, string failureCategory)
     {
         logger.LogInformation(
-            "Ollama operation completed. Provider: {Provider}; Model: {Model}; Operation: {Operation}; DurationMilliseconds: {DurationMilliseconds}; Outcome: {Outcome}; FailureCategory: {FailureCategory}",
-            "Ollama",
-            options.Model,
+            "AI provider operation completed. Provider: {Provider}; Model: {Model}; Operation: {Operation}; DurationMilliseconds: {DurationMilliseconds}; Outcome: {Outcome}; FailureCategory: {FailureCategory}",
+            provider.ProviderName,
+            provider.ModelName,
             "readiness",
             stopwatch.ElapsedMilliseconds,
             outcome,

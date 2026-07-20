@@ -7,7 +7,7 @@ These checks exercise the current Phase 8 deployment: React/Nginx, the ASP.NET C
 - Docker Desktop is running with Linux containers enabled.
 - The .NET SDK selected by `global.json` is installed for backend validation.
 - Node.js 22 or later is installed for local frontend validation.
-- Copy `.env.example` to `.env` for a fresh checkout. Install Ollama on the host, pull `llama3.2:3b`, and retain `AI_MODEL=llama3.2:3b` unless deliberately using another locally installed model.
+- Copy `.env.example` to `.env` for a fresh checkout. Install Ollama on the host, pull `llama3.2:3b`, and retain `AI_PROVIDER=Ollama` with `OLLAMA_MODEL=llama3.2:3b` unless deliberately using another locally installed model.
 
 ## Start The Deployment
 

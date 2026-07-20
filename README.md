@@ -13,7 +13,7 @@ flowchart LR
     Knowledge --> Files[data/knowledge]
 ```
 
-Financial values are deterministic C# and SQL results. Ollama is the only runtime LLM provider, configured through the existing `IChatClient` boundary, and is never an authority for finance calculations.
+Financial values are deterministic C# and SQL results. The runtime LLM is selected through the existing `IChatClient` boundary; Ollama is the only registered provider today and is never an authority for finance calculations.
 
 ## Start the complete application
 
@@ -25,7 +25,7 @@ Docker Compose reads deployment settings from the root `.env` file. It is intent
 Copy-Item .env.example .env
 ```
 
-Install Ollama on the Windows host and pull the configured `AI_MODEL`, which defaults to `llama3.2:3b`. The `.env` file also holds the Ollama base URL, local PostgreSQL credentials, ports, MCP endpoints, and Chroma/RAG settings.
+Install Ollama on the Windows host and pull the configured `OLLAMA_MODEL`, which defaults to `llama3.2:3b`. The `.env` file selects `AI_PROVIDER=Ollama` and also holds the Ollama base URL, local PostgreSQL credentials, ports, MCP endpoints, and Chroma/RAG settings.
 
 ```powershell
 docker compose up --build -d
@@ -45,7 +45,7 @@ Use `docker compose ps`, `docker compose logs --no-color`, and `docker compose d
 
 ## Providers
 
-Docker configuration uses Ollama and `AI_MODEL=llama3.2:3b` by default. Compose reaches the Windows-host service at `http://host.docker.internal:11434`. Startup never downloads or starts Ollama; install it and pull the configured model before starting the API.
+Docker configuration selects Ollama with `AI_PROVIDER=Ollama` and `OLLAMA_MODEL=llama3.2:3b` by default. Compose reaches the Windows-host service at `http://host.docker.internal:11434`. Startup never downloads or starts Ollama; install it and pull the configured model before starting the API. A future provider needs its own adapter and composition-root registration; agents, endpoints, and response contracts remain provider-neutral.
 
 ## Service boundaries
 

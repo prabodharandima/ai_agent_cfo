@@ -113,8 +113,13 @@ services:
     command: ["--ingest-rag"]
     environment:
       ASPNETCORE_ENVIRONMENT: ${RAG_INIT_ASPNETCORE_ENVIRONMENT:?Set RAG_INIT_ASPNETCORE_ENVIRONMENT in .env}
-      AI__Model: ${AI_MODEL:?Set AI_MODEL in .env}
-      AI__BaseUrl: ${OLLAMA_BASE_URL:?Set OLLAMA_BASE_URL in .env}
+      AI__Provider: ${AI_PROVIDER:?Set AI_PROVIDER in .env}
+      AI__Ollama__Model: ${OLLAMA_MODEL:?Set OLLAMA_MODEL in .env}
+      AI__Ollama__BaseUrl: ${OLLAMA_BASE_URL:?Set OLLAMA_BASE_URL in .env}
+      AI__Ollama__TimeoutSeconds: ${OLLAMA_TIMEOUT_SECONDS:?Set OLLAMA_TIMEOUT_SECONDS in .env}
+      AI__Ollama__Temperature: ${OLLAMA_TEMPERATURE:?Set OLLAMA_TEMPERATURE in .env}
+      AI__Ollama__ContextLength: ${OLLAMA_CONTEXT_LENGTH:?Set OLLAMA_CONTEXT_LENGTH in .env}
+      AI__Ollama__MaxOutputTokens: ${OLLAMA_MAX_OUTPUT_TOKENS:?Set OLLAMA_MAX_OUTPUT_TOKENS in .env}
       Chroma__BaseUrl: ${CHROMA_BASE_URL:?Set CHROMA_BASE_URL in .env}
       Chroma__CollectionName: ${CHROMA_COLLECTION_NAME:?Set CHROMA_COLLECTION_NAME in .env}
       Chroma__Tenant: ${CHROMA_TENANT:?Set CHROMA_TENANT in .env}
@@ -146,12 +151,13 @@ services:
       dockerfile: src/CfoAgent.Api/Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:?Set ASPNETCORE_ENVIRONMENT in .env}
-      AI__Model: ${AI_MODEL:?Set AI_MODEL in .env}
-      AI__BaseUrl: ${OLLAMA_BASE_URL:?Set OLLAMA_BASE_URL in .env}
-      AI__TimeoutSeconds: ${AI_TIMEOUT_SECONDS:?Set AI_TIMEOUT_SECONDS in .env}
-      AI__Temperature: ${AI_TEMPERATURE:?Set AI_TEMPERATURE in .env}
-      AI__ContextLength: ${AI_CONTEXT_LENGTH:?Set AI_CONTEXT_LENGTH in .env}
-      AI__MaxOutputTokens: ${AI_MAX_OUTPUT_TOKENS:?Set AI_MAX_OUTPUT_TOKENS in .env}
+      AI__Provider: ${AI_PROVIDER:?Set AI_PROVIDER in .env}
+      AI__Ollama__Model: ${OLLAMA_MODEL:?Set OLLAMA_MODEL in .env}
+      AI__Ollama__BaseUrl: ${OLLAMA_BASE_URL:?Set OLLAMA_BASE_URL in .env}
+      AI__Ollama__TimeoutSeconds: ${OLLAMA_TIMEOUT_SECONDS:?Set OLLAMA_TIMEOUT_SECONDS in .env}
+      AI__Ollama__Temperature: ${OLLAMA_TEMPERATURE:?Set OLLAMA_TEMPERATURE in .env}
+      AI__Ollama__ContextLength: ${OLLAMA_CONTEXT_LENGTH:?Set OLLAMA_CONTEXT_LENGTH in .env}
+      AI__Ollama__MaxOutputTokens: ${OLLAMA_MAX_OUTPUT_TOKENS:?Set OLLAMA_MAX_OUTPUT_TOKENS in .env}
       Chroma__BaseUrl: ${CHROMA_BASE_URL:?Set CHROMA_BASE_URL in .env}
       Chroma__CollectionName: ${CHROMA_COLLECTION_NAME:?Set CHROMA_COLLECTION_NAME in .env}
       Chroma__Tenant: ${CHROMA_TENANT:?Set CHROMA_TENANT in .env}
