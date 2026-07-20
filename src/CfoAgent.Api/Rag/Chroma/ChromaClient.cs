@@ -101,6 +101,28 @@ public sealed class ChromaClient(HttpClient httpClient, IOptions<ChromaOptions> 
         EnsureSuccess(response, "upsert ChromaDB records");
     }
 
+    public async Task DeleteBySourcePathAsync(
+        ChromaCollection collection,
+        string sourcePath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(collection);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{CollectionPath(collection.Id)}/delete")
+        {
+            Content = JsonContent.Create(new
+            {
+                where = new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["source_path"] = sourcePath
+                }
+            })
+        };
+        using var response = await SendAsync(request, cancellationToken);
+        EnsureSuccess(response, "delete stale ChromaDB records for the source document");
+    }
+
     public async Task<IReadOnlyList<ChromaQueryMatch>> QueryAsync(
         ChromaCollection collection,
         IReadOnlyList<float> embedding,

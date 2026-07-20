@@ -47,6 +47,18 @@ public sealed class FinancialKnowledgeRetrievalTests
     }
 
     [Fact]
+    public async Task RetrieveAsync_RemovesDuplicateNormalizedChunkTextBeforeItCanReachTheKnowledgeContext()
+    {
+        var service = CreateSearch(new RepeatedChunkContentHandler());
+
+        var result = await service.RetrieveAsync(new FinancialKnowledgeQuery("What is the annual target?", TopK: 2));
+
+        var source = Assert.Single(result.Sources);
+        Assert.Equal("first-overlap", source.ChunkId);
+        Assert.Equal("Annual Target", source.Section);
+    }
+
+    [Fact]
     public async Task FinancialKnowledgeAgent_AnswersFromRetrievedContextWithUniqueCitations()
     {
         var retrieval = CreateSearch(new KnowledgeHandler());
@@ -144,6 +156,29 @@ public sealed class FinancialKnowledgeRetrievalTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+    }
+
+    private sealed class RepeatedChunkContentHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.Method == HttpMethod.Get)
+            {
+                return Task.FromResult(JsonResponse("""{"id":"collection-1","name":"cfo-financial-knowledge"}"""));
+            }
+
+            return Task.FromResult(JsonResponse("""
+                {
+                  "ids":[["first-overlap","second-overlap"]],
+                  "documents":[["The FY2026 sales target is 3000000.","The  FY2026 sales target is 3000000."]],
+                  "metadatas":[[
+                    {"document_id":"current-budget-target-2026","document_name":"Current Budget And Annual Target","document_type":"budget_target","period":"2026","section":"Annual Target","source_path":"data/knowledge/current-budget-and-target.md"},
+                    {"document_id":"current-budget-target-2026","document_name":"Current Budget And Annual Target","document_type":"budget_target","period":"2026","section":"Target Detail","source_path":"data/knowledge/current-budget-and-target.md"}
+                  ]],
+                  "distances":[[0.1,0.2]]
+                }
+                """));
+        }
     }
 
     private static HttpResponseMessage JsonResponse(string content) => new(HttpStatusCode.OK)

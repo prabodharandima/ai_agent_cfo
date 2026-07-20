@@ -40,7 +40,15 @@ builder.Services.AddOptions<ChromaOptions>()
 builder.Services.AddOptions<RagOptions>()
     .BindConfiguration(RagOptions.SectionName)
     .Validate(options => !string.IsNullOrWhiteSpace(options.KnowledgeFilesRoot), "Rag:KnowledgeFilesRoot is required.")
+    .Validate(options => options.MaxChunkCharacters > 0, "Rag:MaxChunkCharacters must be greater than zero.")
     .Validate(options => options.MaxChunkCharacters >= 256, "Rag:MaxChunkCharacters must be at least 256.")
+    .Validate(options => options.ChunkOverlapPercentage >= 0, "Rag:ChunkOverlapPercentage must not be negative.")
+    .Validate(options => options.ChunkOverlapPercentage < 100, "Rag:ChunkOverlapPercentage must be less than 100.")
+    .Validate(options => options.MaxChunkCharacters > 0
+        && options.ChunkOverlapPercentage >= 0
+        && options.ChunkOverlapPercentage < 100
+        && options.GetChunkOverlapSize() < options.MaxChunkCharacters,
+        "Rag:ChunkOverlapPercentage must produce an overlap smaller than Rag:MaxChunkCharacters.")
     .Validate(options => options.MaxKnowledgeContextCharacters >= 256, "Rag:MaxKnowledgeContextCharacters must be at least 256.")
     .Validate(options => options.MaximumRetrievalDistance >= 0, "Rag:MaximumRetrievalDistance must not be negative.")
     .ValidateOnStart();

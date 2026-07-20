@@ -49,6 +49,21 @@ public sealed class ChromaClientTests
     }
 
     [Fact]
+    public async Task DeleteBySourcePathAsync_UsesMetadataFilterForTheConfiguredCollection()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var client = CreateClient(handler);
+
+        await client.DeleteBySourcePathAsync(new ChromaCollection("collection-1", "financial-knowledge"), "data/knowledge/budget.md");
+
+        Assert.Equal(HttpMethod.Post, handler.Method);
+        Assert.Equal(
+            "/api/v2/tenants/default_tenant/databases/default_database/collections/collection-1/delete",
+            handler.PathAndQuery);
+        Assert.Contains("\"source_path\":\"data/knowledge/budget.md\"", handler.Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task QueryAsync_ParsesTopKMatches()
     {
         var handler = new RecordingHandler(_ => JsonResponse("""

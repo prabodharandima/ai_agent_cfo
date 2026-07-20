@@ -11,6 +11,7 @@ services:
       AI__Ollama__Model: llama3.2:3b
       Chroma__BaseUrl: http://chromadb:8000
       Rag__KnowledgeFilesRoot: /knowledge
+      Rag__ChunkOverlapPercentage: "15"
       Mcp__Finance__Enabled: "false"
       Mcp__KnowledgeFiles__Enabled: "false"
       Mcp__KnowledgeFiles__UseLocalFallback: "false"

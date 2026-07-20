@@ -61,7 +61,97 @@ public sealed class RagDocumentIngestionServiceTests
         Assert.Contains("front matter", failure.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static RagDocumentIngestionService CreateService(string knowledgeRoot, RecordingHandler handler)
+    [Fact]
+    public async Task IngestAsync_UsesNonOverlappingSlidingWindowsWhenOverlapIsZero()
+    {
+        using var directory = new TemporaryDirectory();
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "alphabet.md"), CreateDocument("abcdefghijklmnopqrstuvwxyz"));
+        var handler = new RecordingHandler();
+
+        var result = await CreateService(directory.Path, handler, chunkSize: 10, overlapPercentage: 0).IngestAsync();
+
+        Assert.Equal(3, result.ChunksAddedOrUpdated);
+        Assert.Equal(["abcdefghij", "klmnopqrst", "uvwxyz"], ReadDocuments(handler.UpsertBodies.Single()));
+        Assert.Equal([0, 10, 20], ReadOffsets(handler.UpsertBodies.Single(), "chunk_start"));
+        Assert.Equal([10, 20, 26], ReadOffsets(handler.UpsertBodies.Single(), "chunk_end"));
+    }
+
+    [Fact]
+    public async Task IngestAsync_UsesFifteenPercentOverlapAndCoversTheFinalTextRange()
+    {
+        using var directory = new TemporaryDirectory();
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "alphabet.md"), CreateDocument("abcdefghijklmnopqrstuvwxyz"));
+        var handler = new RecordingHandler();
+
+        var result = await CreateService(directory.Path, handler, chunkSize: 10, overlapPercentage: 15).IngestAsync();
+
+        Assert.Equal(3, result.ChunksAddedOrUpdated);
+        var documents = ReadDocuments(handler.UpsertBodies.Single());
+        var starts = ReadOffsets(handler.UpsertBodies.Single(), "chunk_start");
+        var ends = ReadOffsets(handler.UpsertBodies.Single(), "chunk_end");
+
+        Assert.Equal(["abcdefghij", "ijklmnopqr", "qrstuvwxyz"], documents);
+        Assert.Equal([0, 8, 16], starts);
+        Assert.Equal([10, 18, 26], ends);
+        Assert.Equal(documents[0][^2..], documents[1][..2]);
+        Assert.Equal(documents[1][^2..], documents[2][..2]);
+        Assert.Equal(0, starts[0]);
+        Assert.Equal(26, ends[^1]);
+        Assert.All(Enumerable.Range(1, starts.Length - 1), index => Assert.True(starts[index] <= ends[index - 1]));
+    }
+
+    [Theory]
+    [InlineData("short", 1)]
+    [InlineData("exactly-ten", 1)]
+    public async Task IngestAsync_CreatesOneChunkForShortOrExactSizeDocuments(string content, int expectedChunks)
+    {
+        using var directory = new TemporaryDirectory();
+        var text = content == "exactly-ten" ? "abcdefghij" : content;
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "document.md"), CreateDocument(text));
+        var handler = new RecordingHandler();
+
+        var result = await CreateService(directory.Path, handler, chunkSize: 10, overlapPercentage: 15).IngestAsync();
+
+        Assert.Equal(expectedChunks, result.ChunksAddedOrUpdated);
+        Assert.Equal([text], ReadDocuments(handler.UpsertBodies.Single()));
+    }
+
+    [Fact]
+    public async Task IngestAsync_ReplacesPreviousSourceChunksWhenTheChunkConfigurationChanges()
+    {
+        using var directory = new TemporaryDirectory();
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "alphabet.md"), CreateDocument("abcdefghijklmnopqrstuvwxyz"));
+        var handler = new RecordingHandler();
+
+        await CreateService(directory.Path, handler, chunkSize: 10, overlapPercentage: 0).IngestAsync();
+        await CreateService(directory.Path, handler, chunkSize: 10, overlapPercentage: 15).IngestAsync();
+
+        Assert.Equal(["delete", "upsert", "delete", "upsert"], handler.Operations);
+        Assert.Equal(2, handler.DeleteBodies.Count);
+        Assert.All(handler.DeleteBodies, body => Assert.Contains("\"source_path\":\"data/knowledge/test.md\"", body, StringComparison.Ordinal));
+        Assert.NotEqual(ReadIds(handler.UpsertBodies[0]), ReadIds(handler.UpsertBodies[1]));
+    }
+
+    [Fact]
+    public async Task IngestAsync_DoesNotStoreEmptyChunksAndClearsExistingSourceRecords()
+    {
+        using var directory = new TemporaryDirectory();
+        await File.WriteAllTextAsync(Path.Combine(directory.Path, "empty.md"), CreateDocument(string.Empty));
+        var handler = new RecordingHandler();
+
+        var result = await CreateService(directory.Path, handler, chunkSize: 10, overlapPercentage: 15).IngestAsync();
+
+        Assert.Equal(1, result.Skipped);
+        Assert.Equal(0, result.ChunksAddedOrUpdated);
+        Assert.Empty(handler.UpsertBodies);
+        Assert.Equal(["delete"], handler.Operations);
+    }
+
+    private static RagDocumentIngestionService CreateService(
+        string knowledgeRoot,
+        RecordingHandler handler,
+        int chunkSize = 256,
+        int overlapPercentage = 15)
     {
         var httpClient = new HttpClient(handler)
         {
@@ -80,13 +170,57 @@ public sealed class RagDocumentIngestionServiceTests
         return new RagDocumentIngestionService(chroma, embeddings, Options.Create(new RagOptions
         {
             KnowledgeFilesRoot = knowledgeRoot,
-            MaxChunkCharacters = 256
+            MaxChunkCharacters = chunkSize,
+            ChunkOverlapPercentage = overlapPercentage
         }));
     }
+
+    private static string[] ReadDocuments(string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        return document.RootElement.GetProperty("documents").EnumerateArray()
+            .Select(value => value.GetString())
+            .OfType<string>()
+            .ToArray();
+    }
+
+    private static int[] ReadOffsets(string body, string property)
+    {
+        using var document = JsonDocument.Parse(body);
+        return document.RootElement.GetProperty("metadatas").EnumerateArray()
+            .Select(value => int.Parse(value.GetProperty(property).GetString()!, System.Globalization.CultureInfo.InvariantCulture))
+            .ToArray();
+    }
+
+    private static string[] ReadIds(string body)
+    {
+        using var document = JsonDocument.Parse(body);
+        return document.RootElement.GetProperty("ids").EnumerateArray()
+            .Select(value => value.GetString())
+            .OfType<string>()
+            .ToArray();
+    }
+
+    private static string CreateDocument(string body) => $$"""
+        ---
+        document_id: test-document
+        document_name: Test Document
+        document_type: test_document
+        period: 2026
+        section: Test Section
+        source_path: data/knowledge/test.md
+        ---
+
+        {{body}}
+        """;
 
     private sealed class RecordingHandler : HttpMessageHandler
     {
         public List<string> UpsertBodies { get; } = [];
+
+        public List<string> DeleteBodies { get; } = [];
+
+        public List<string> Operations { get; } = [];
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -97,7 +231,15 @@ public sealed class RagDocumentIngestionServiceTests
 
             if (request.RequestUri.AbsolutePath.EndsWith("/upsert", StringComparison.Ordinal))
             {
+                Operations.Add("upsert");
                 UpsertBodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+
+            if (request.RequestUri.AbsolutePath.EndsWith("/delete", StringComparison.Ordinal))
+            {
+                Operations.Add("delete");
+                DeleteBodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
                 return new HttpResponseMessage(HttpStatusCode.OK);
             }
 
