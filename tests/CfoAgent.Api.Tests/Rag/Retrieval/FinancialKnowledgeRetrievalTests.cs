@@ -1,6 +1,5 @@
 using System.Net;
 using System.Text;
-using CfoAgent.Api.AI.Mock;
 using CfoAgent.Api.Agents;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
@@ -10,6 +9,7 @@ using CfoAgent.Api.Rag.Embeddings;
 using CfoAgent.Api.Rag.Retrieval;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
+using CfoAgent.Api.Tests.AI;
 
 namespace CfoAgent.Api.Tests.Rag.Retrieval;
 
@@ -50,7 +50,7 @@ public sealed class FinancialKnowledgeRetrievalTests
     public async Task FinancialKnowledgeAgent_AnswersFromRetrievedContextWithUniqueCitations()
     {
         var retrieval = CreateSearch(new KnowledgeHandler());
-        using var client = new MockChatClient(Options.Create(new AiOptions { Provider = "Mock", Model = "DeterministicMock" }));
+        using var client = TestChatClient.CreateMvp();
         var agent = new FinancialKnowledgeAgent(
             retrieval,
             client,
@@ -60,7 +60,7 @@ public sealed class FinancialKnowledgeRetrievalTests
 
         Assert.Equal(AgentResponseType.Knowledge, result.ResponseType);
         Assert.Equal(AgentDefinitions.FinancialKnowledge.Name, Assert.Single(result.AgentNames));
-        Assert.Contains("Mock knowledge answer", result.Answer, StringComparison.Ordinal);
+        Assert.Contains("Verified test response", result.Answer, StringComparison.Ordinal);
         Assert.Equal(4, result.Sources.Count);
         Assert.Contains(result.Sources, source => source.DocumentName == "Current Budget And Annual Target");
         Assert.Contains(result.Sources, source => source.DocumentName == "Forecast Assumptions");
@@ -73,7 +73,7 @@ public sealed class FinancialKnowledgeRetrievalTests
     public async Task FinancialKnowledgeAgent_DoesNotFabricateWhenKnowledgeIsMissing()
     {
         var retrieval = CreateSearch(new MissingCollectionHandler());
-        using var client = new MockChatClient(Options.Create(new AiOptions { Provider = "Mock", Model = "DeterministicMock" }));
+        using var client = TestChatClient.CreateMvp();
         var agent = new FinancialKnowledgeAgent(
             retrieval,
             client,

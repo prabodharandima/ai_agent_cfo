@@ -113,8 +113,7 @@ services:
     command: ["--ingest-rag"]
     environment:
       ASPNETCORE_ENVIRONMENT: ${RAG_INIT_ASPNETCORE_ENVIRONMENT:?Set RAG_INIT_ASPNETCORE_ENVIRONMENT in .env}
-      AI__Provider: ${RAG_INIT_AI_PROVIDER:?Set RAG_INIT_AI_PROVIDER in .env}
-      AI__Model: ${RAG_INIT_AI_MODEL:?Set RAG_INIT_AI_MODEL in .env}
+      AI__Model: ${AI_MODEL:?Set AI_MODEL in .env}
       AI__BaseUrl: ${OLLAMA_BASE_URL:?Set OLLAMA_BASE_URL in .env}
       Chroma__BaseUrl: ${CHROMA_BASE_URL:?Set CHROMA_BASE_URL in .env}
       Chroma__CollectionName: ${CHROMA_COLLECTION_NAME:?Set CHROMA_COLLECTION_NAME in .env}
@@ -147,7 +146,6 @@ services:
       dockerfile: src/CfoAgent.Api/Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:?Set ASPNETCORE_ENVIRONMENT in .env}
-      AI__Provider: ${AI_PROVIDER:?Set AI_PROVIDER in .env}
       AI__Model: ${AI_MODEL:?Set AI_MODEL in .env}
       AI__BaseUrl: ${OLLAMA_BASE_URL:?Set OLLAMA_BASE_URL in .env}
       AI__TimeoutSeconds: ${AI_TIMEOUT_SECONDS:?Set AI_TIMEOUT_SECONDS in .env}

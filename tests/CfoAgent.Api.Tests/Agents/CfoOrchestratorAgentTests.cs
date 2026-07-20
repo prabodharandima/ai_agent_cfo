@@ -1,4 +1,3 @@
-using CfoAgent.Api.AI.Mock;
 using CfoAgent.Api.Agents;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
@@ -10,6 +9,7 @@ using CfoAgent.Api.Rag.Retrieval;
 using CfoAgent.Api.Tests.Finance;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
+using CfoAgent.Api.Tests.AI;
 
 namespace CfoAgent.Api.Tests.Agents;
 
@@ -39,18 +39,18 @@ public sealed class CfoOrchestratorAgentTests
     [InlineData("What is the annual target and what assumptions were used?", CfoIntent.Knowledge)]
     [InlineData("Give me the forecast and target assumptions.", CfoIntent.Mixed)]
     [InlineData("Write a limerick about office furniture.", CfoIntent.Unsupported)]
-    public async Task ClassifyAsync_DeterministicFallbackMatchesMockForEveryIntent(string prompt, CfoIntent expected)
+    public async Task ClassifyAsync_DeterministicFallbackMatchesTheTestDoubleForEveryIntent(string prompt, CfoIntent expected)
     {
-        using var mockClient = CreateClient();
+        using var testClient = CreateClient();
         using var fallbackClient = new InvalidClassificationChatClient();
-        var mockOrchestrator = new CfoOrchestratorAgent(null!, null!, null!, new AgentResultComposer(), mockClient);
+        var testOrchestrator = new CfoOrchestratorAgent(null!, null!, null!, new AgentResultComposer(), testClient);
         var fallbackOrchestrator = new CfoOrchestratorAgent(null!, null!, null!, new AgentResultComposer(), fallbackClient);
 
-        var mockIntent = await mockOrchestrator.ClassifyAsync(prompt);
+        var testIntent = await testOrchestrator.ClassifyAsync(prompt);
         var fallbackIntent = await fallbackOrchestrator.ClassifyAsync(prompt);
 
-        Assert.Equal(expected, mockIntent);
-        Assert.Equal(mockIntent, fallbackIntent);
+        Assert.Equal(expected, testIntent);
+        Assert.Equal(testIntent, fallbackIntent);
     }
 
     [Fact]
@@ -71,8 +71,8 @@ public sealed class CfoOrchestratorAgentTests
 
         Assert.Equal(AgentResponseType.Mixed, result.ResponseType);
         Assert.Equal([AgentDefinitions.Forecasting.Name, AgentDefinitions.FinancialKnowledge.Name], result.AgentNames);
-        Assert.StartsWith("Mock forecast explanation", result.Answer, StringComparison.Ordinal);
-        Assert.Contains("Mock knowledge answer", result.Answer, StringComparison.Ordinal);
+        Assert.StartsWith("Verified test response", result.Answer, StringComparison.Ordinal);
+        Assert.Contains("Verified test response", result.Answer, StringComparison.Ordinal);
         Assert.NotEmpty(result.Assumptions);
         Assert.Single(result.Sources);
         Assert.Equal(1, financeClient.HistoricalCalls);
@@ -165,12 +165,8 @@ public sealed class CfoOrchestratorAgentTests
         MaximumRetrievalDistance = 1.25f
     });
 
-    private static MockChatClient CreateClient(int simulatedDelayMilliseconds = 0) => new(Options.Create(new AiOptions
-    {
-        Provider = "Mock",
-        Model = "DeterministicMock",
-        SimulatedDelayMilliseconds = simulatedDelayMilliseconds
-    }));
+    private static TestChatClient CreateClient(int simulatedDelayMilliseconds = 0) =>
+        TestChatClient.CreateMvp(TimeSpan.FromMilliseconds(simulatedDelayMilliseconds));
 
     private sealed class InvalidClassificationChatClient : IChatClient
     {

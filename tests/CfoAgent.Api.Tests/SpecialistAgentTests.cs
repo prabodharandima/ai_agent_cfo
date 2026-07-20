@@ -1,14 +1,12 @@
 using System.Text.Json;
-using CfoAgent.Api.AI.Mock;
 using CfoAgent.Api.Agents;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
-using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Features.Forecasting;
 using CfoAgent.Api.Features.Sales;
 using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Tests.Finance;
-using Microsoft.Extensions.Options;
+using CfoAgent.Api.Tests.AI;
 
 namespace CfoAgent.Api.Tests;
 
@@ -56,10 +54,10 @@ public sealed class SpecialistAgentTests
         Assert.Equal(responseType, result.ResponseType);
         Assert.Equal(agentName, Assert.Single(result.AgentNames));
         Assert.NotNull(result.StructuredData);
-        Assert.Contains("based only on verified context", result.Answer, StringComparison.Ordinal);
+        Assert.Contains("Verified test response", result.Answer, StringComparison.Ordinal);
     }
 
-    private static MockChatClient CreateClient() => new(Options.Create(new AiOptions { Provider = "Mock", Model = "DeterministicMock" }));
+    private static TestChatClient CreateClient() => TestChatClient.CreateMvp();
 
     private sealed class FinanceFake : IFinanceMcpClient
     {

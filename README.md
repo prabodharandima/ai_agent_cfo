@@ -13,7 +13,7 @@ flowchart LR
     Knowledge --> Files[data/knowledge]
 ```
 
-Financial values are deterministic C# and SQL results. `MockChatClient` is the default offline provider. Optional Ollama uses the existing `IChatClient` configuration and is never an authority for finance calculations.
+Financial values are deterministic C# and SQL results. Ollama is the only runtime LLM provider, configured through the existing `IChatClient` boundary, and is never an authority for finance calculations.
 
 ## Start the complete application
 
@@ -25,7 +25,7 @@ Docker Compose reads deployment settings from the root `.env` file. It is intent
 Copy-Item .env.example .env
 ```
 
-Set `AI_PROVIDER=Mock` for the offline default, or set `AI_PROVIDER=Ollama` and `AI_MODEL=llama3.2:3b` after installing Ollama on the Windows host. The `.env` file also holds local PostgreSQL credentials, ports, MCP endpoints, and Chroma/RAG settings.
+Install Ollama on the Windows host and pull the configured `AI_MODEL`, which defaults to `llama3.2:3b`. The `.env` file also holds the Ollama base URL, local PostgreSQL credentials, ports, MCP endpoints, and Chroma/RAG settings.
 
 ```powershell
 docker compose up --build -d
@@ -45,7 +45,7 @@ Use `docker compose ps`, `docker compose logs --no-color`, and `docker compose d
 
 ## Providers
 
-Default Docker configuration is `AI_PROVIDER=Mock` and `AI_MODEL=DeterministicMock` in `.env`. To use the optional host Ollama provider, set `AI_PROVIDER=Ollama` and `AI_MODEL=llama3.2:3b` in `.env`, then recreate the API with `docker compose up -d --force-recreate api`. Compose reaches it at `http://host.docker.internal:11434`. Startup never downloads or starts Ollama, and there is no automatic Ollama-to-Mock fallback.
+Docker configuration uses Ollama and `AI_MODEL=llama3.2:3b` by default. Compose reaches the Windows-host service at `http://host.docker.internal:11434`. Startup never downloads or starts Ollama; install it and pull the configured model before starting the API.
 
 ## Service boundaries
 
@@ -69,7 +69,7 @@ npm run build
 npm run test:e2e:container
 ```
 
-`test:e2e:container` is deterministic when the Docker API uses the default Mock provider. If the deployment is intentionally configured for Ollama, use the manual workflows instead or recreate the API with `AI_PROVIDER=Mock` before running this timing-sensitive regression suite.
+`test:e2e:container` requires the Docker API's configured host Ollama endpoint and model to be available. Use the unit-test gate for offline deterministic coverage.
 
 Run `scripts/test-phase-8-containers.ps1` from the repository root for the isolated real-container resilience gate. See [Phase 8 results](docs/PHASE-8-RESULTS.md), [architecture](APPLICATION_ARCHITECTURE.md), [demo script](docs/DEMO-SCRIPT.md), and [security notes](docs/SECURITY-NOTES.md).
 

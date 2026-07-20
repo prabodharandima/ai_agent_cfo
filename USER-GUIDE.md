@@ -27,7 +27,7 @@ Install and start the following before continuing:
 - Node.js 22 or later with npm for local frontend development and frontend tests.
 - PowerShell on Windows for the supplied scripts.
 
-Ollama is optional. The default provider is the deterministic offline Mock LLM, so no model download, API key, or Ollama installation is required for the standard deployment.
+Install Ollama on the Windows host and pull `llama3.2:3b` before starting the standard deployment. It is the only runtime LLM provider; no API key is required.
 
 Confirm Docker Desktop is healthy:
 
@@ -48,7 +48,7 @@ Open `.env` and set the values you need. Important settings include:
 
 | Setting | Purpose |
 |---|---|
-| `AI_PROVIDER` / `AI_MODEL` | Select `Mock` / `DeterministicMock` or `Ollama` / `llama3.2:3b` |
+| `AI_MODEL` | Locally installed Ollama model, normally `llama3.2:3b` |
 | `OLLAMA_BASE_URL` | Host address used by API containers; normally `http://host.docker.internal:11434` |
 | `POSTGRES_*` and `FINANCE_DATABASE_CONNECTION_STRING` | Local Finance MCP PostgreSQL database settings |
 | `PGADMIN_DEFAULT_EMAIL` / `PGADMIN_DEFAULT_PASSWORD` | Local pgAdmin sign-in credentials |
@@ -56,10 +56,9 @@ Open `.env` and set the values you need. Important settings include:
 | `FINANCE_MCP_*` / `KNOWLEDGE_MCP_*` | Internal MCP endpoints, enabled flags, and timeouts |
 | `CHROMA_*` / `RAG_*` | ChromaDB and ingestion settings |
 
-The committed `.env.example` selects Mock. Set the following before starting Compose to use host Ollama:
+The committed `.env.example` configures the default Ollama model:
 
 ```env
-AI_PROVIDER=Ollama
 AI_MODEL=llama3.2:3b
 ```
 
@@ -318,7 +317,7 @@ npm run test:e2e:container
 ```
 
 `test:e2e:container` runs Playwright against the already-running Docker frontend and verifies all five MVP scenarios.
-Run it with the default Mock provider. Ollama is supported for manual use, but its response time is not the deterministic timing contract exercised by this browser regression suite.
+The browser suite requires the configured host Ollama endpoint and model. Use the offline .NET unit-test gate for deterministic test-double coverage.
 
 Run the isolated MCP/container resilience gate from the repository root:
 
@@ -328,9 +327,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-phase-8-contain
 
 This script uses a separate Compose project and removes only its own test containers, network, and volumes. It verifies seed data, RAG ingestion, MCP tools, outage handling, cancellation, security restrictions, and recovery.
 
-## 12. Optional Ollama provider
+## 12. Ollama host setup
 
-The default provider is Mock. To use Ollama locally, install Ollama on Windows and pull the model manually:
+Install Ollama on Windows and pull the configured model manually:
 
 ```powershell
 ollama pull llama3.2:3b
@@ -339,12 +338,11 @@ ollama pull llama3.2:3b
 For local API execution, configure:
 
 ```powershell
-$env:AI__Provider = 'Ollama'
 $env:AI__Model = 'llama3.2:3b'
 $env:AI__BaseUrl = 'http://localhost:11434'
 ```
 
-For Docker Compose, set `AI_PROVIDER=Ollama` and `AI_MODEL=llama3.2:3b` in `.env`, then run `docker compose up -d --force-recreate api`. Containers reach host Ollama through `host.docker.internal`. Ollama is never asked to calculate financial values or replace ChromaDB retrieval. When the application supplies a bounded approved MCP tool set for a Finance operation, Ollama may return one function call from that set; the API still validates the selected tool and canonical deterministic arguments before invocation.
+For Docker Compose, retain `AI_MODEL=llama3.2:3b` in `.env`, then run `docker compose up -d --force-recreate api`. Containers reach host Ollama through `host.docker.internal`. Ollama is never asked to calculate financial values or replace ChromaDB retrieval. When the application supplies a bounded approved MCP tool set for a Finance operation, Ollama may return one function call from that set; the API still validates the selected tool and canonical deterministic arguments before invocation.
 
 ## 13. Stop or reset the application
 
@@ -379,5 +377,6 @@ Use `down -v` only when you really want a clean data reset. The next `docker com
 | Target/assumptions request fails | Confirm `knowledge-mcp`, `chromadb`, and successful `rag-init` completion. |
 | Port is already in use | Set `CFO_UI_PORT` or `CFO_API_PORT` before starting Compose, for example `$env:CFO_UI_PORT = '5180'`. |
 | Docker cannot start | Confirm Docker Desktop is running with `docker version` and `docker info`. |
+| API readiness reports Ollama unavailable | Start Ollama on Windows, run `ollama pull llama3.2:3b`, and confirm `OLLAMA_BASE_URL` in `.env` is reachable from Docker. |
 
 For architecture detail and final test results, see [APPLICATION_ARCHITECTURE.md](APPLICATION_ARCHITECTURE.md), [docs/PHASE-8-RESULTS.md](docs/PHASE-8-RESULTS.md), and [docs/MCP-INTEGRATION-REFACTOR-RESULTS.md](docs/MCP-INTEGRATION-REFACTOR-RESULTS.md).

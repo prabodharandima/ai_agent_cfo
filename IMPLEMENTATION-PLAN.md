@@ -1,6 +1,6 @@
 # Implementation Plan
 
-Phases 0 through 7 established the monolithic API, deterministic finance behavior, Mock/Ollama `IChatClient` providers, ChromaDB RAG, the chat UI, and hardening.
+Phases 0 through 7 established the monolithic API, deterministic finance behavior, the Ollama `IChatClient` provider, ChromaDB RAG, the chat UI, and hardening.
 
 ## Phase 8 — Complete
 

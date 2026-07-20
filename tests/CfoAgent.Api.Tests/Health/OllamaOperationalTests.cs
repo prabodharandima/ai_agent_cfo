@@ -21,27 +21,13 @@ public sealed class OllamaOperationalTests
     public async Task LiveHealth_DoesNotProbeOllamaWhenOllamaIsStopped()
     {
         var handler = new CountingHandler((_, _) => throw new HttpRequestException("unreachable local provider"));
-        await using var factory = CreateFactory("Ollama", handler);
+        await using var factory = CreateFactory(handler);
         using var client = factory.CreateClient();
 
         using var response = await client.GetAsync("/health/live");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(0, handler.CallCount);
-    }
-
-    [Fact]
-    public async Task ReadyHealth_DoesNotProbeOllamaWhenMockIsSelected()
-    {
-        var handler = new CountingHandler((_, _) => throw new HttpRequestException("must not be called"));
-        await using var factory = CreateFactory("Mock", handler);
-        using var client = factory.CreateClient();
-
-        using var response = await client.GetAsync("/health/ready");
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal(0, handler.CallCount);
-        Assert.Equal("Healthy", await GetDependencyStatusAsync(response, "ollama"));
     }
 
     [Fact]
@@ -53,7 +39,7 @@ public sealed class OllamaOperationalTests
             Assert.Equal("/api/tags", request.RequestUri?.AbsolutePath);
             return Task.FromResult(JsonResponse("""{"models":[{"name":"llama3.2:3b"}]}"""));
         });
-        await using var factory = CreateFactory("Ollama", handler);
+        await using var factory = CreateFactory(handler);
         using var client = factory.CreateClient();
 
         using var response = await client.GetAsync("/health/ready");
@@ -67,7 +53,7 @@ public sealed class OllamaOperationalTests
     public async Task ReadyHealth_ReportsSanitizedFailureWhenOllamaIsUnavailable()
     {
         var handler = new CountingHandler((_, _) => throw new HttpRequestException("http://private-provider:11434/provider-body"));
-        await using var factory = CreateFactory("Ollama", handler);
+        await using var factory = CreateFactory(handler);
         using var client = factory.CreateClient();
 
         using var response = await client.GetAsync("/health/ready");
@@ -88,7 +74,7 @@ public sealed class OllamaOperationalTests
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return JsonResponse("unreachable");
         });
-        await using var factory = CreateFactory("Ollama", handler, timeoutSeconds: "1");
+        await using var factory = CreateFactory(handler, timeoutSeconds: "1");
         using var client = factory.CreateClient();
 
         using var response = await client.GetAsync("/health/ready");
@@ -102,7 +88,7 @@ public sealed class OllamaOperationalTests
     [Fact]
     public async Task ChatApi_MapsOllamaProviderFailureToSanitizedProblemDetails()
     {
-        await using var factory = CreateFactory("Ollama", new CountingHandler((_, _) => Task.FromResult(JsonResponse("""{"models":[{"name":"llama3.2:3b"}]}"""))), services =>
+        await using var factory = CreateFactory(new CountingHandler((_, _) => Task.FromResult(JsonResponse("""{"models":[{"name":"llama3.2:3b"}]}"""))), services =>
         {
             services.RemoveAll<IChatClient>();
             services.AddSingleton<IChatClient>(new ThrowingChatClient(new OllamaProviderException(OllamaFailureKind.Unavailable)));
@@ -125,12 +111,12 @@ public sealed class OllamaOperationalTests
         var handler = new CountingHandler(async (request, cancellationToken) =>
         {
             var requestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
-            var response = requestBody.Contains("[MOCK:CLASSIFY]", StringComparison.Ordinal)
+            var response = requestBody.Contains("Classify the final user request", StringComparison.Ordinal)
                 ? "SalesSummary"
                 : "Grounded executive response based only on verified values.";
             return JsonResponse(CreateChatResponse(response));
         });
-        await using var factory = CreateFactory("Ollama", handler);
+        await using var factory = CreateFactory(handler);
         using var client = factory.CreateClient();
 
         using var response = await client.PostAsJsonAsync("/api/chat", new { message = "Give me the sales summary of this week." });
@@ -151,12 +137,10 @@ public sealed class OllamaOperationalTests
     }
 
     private static WebApplicationFactory<Program> CreateFactory(
-        string provider,
         HttpMessageHandler ollamaHandler,
         Action<IServiceCollection>? configureServices = null,
         string? timeoutSeconds = null) => new ChatApiFactory().WithWebHostBuilder(builder =>
     {
-        builder.UseSetting("AI:Provider", provider);
         builder.UseSetting("AI:Model", "llama3.2:3b");
         if (timeoutSeconds is not null)
         {

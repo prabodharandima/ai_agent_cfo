@@ -1,14 +1,13 @@
 using System.Text.Json;
-using CfoAgent.Api.AI.Mock;
 using CfoAgent.Api.Agents;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
-using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Features.Forecasting;
 using CfoAgent.Api.Features.Sales;
 using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Tests.Finance;
-using Microsoft.Extensions.Options;
+using CfoAgent.Api.Tests.AI;
+using Microsoft.Extensions.AI;
 
 namespace CfoAgent.Api.Tests.Agents;
 
@@ -68,7 +67,7 @@ public sealed class PhaseTwoAgentGateTests
     }
 
     [Fact]
-    public async Task SalesAgentPropagatesCancellationFromTheMockClient()
+    public async Task SalesAgentPropagatesCancellationFromTheTestClient()
     {
         using var client = CreateClient(simulatedDelayMilliseconds: 5_000);
         using var cancellationSource = new CancellationTokenSource();
@@ -80,7 +79,7 @@ public sealed class PhaseTwoAgentGateTests
     }
 
     [Fact]
-    public async Task ForecastAgentWrapsSimulatedMockFailureAsAControlledAgentError()
+    public async Task ForecastAgentWrapsTestClientFailureAsAControlledAgentError()
     {
         using var client = CreateClient(simulateFailure: true);
         var agent = CreateForecastingAgent(client, new FakeFinanceMcpClient());
@@ -92,24 +91,21 @@ public sealed class PhaseTwoAgentGateTests
         Assert.IsType<InvalidOperationException>(exception.InnerException);
     }
 
-    private static SalesAnalysisAgent CreateSalesAgent(MockChatClient client, IFinanceMcpClient mcp) =>
+    private static SalesAnalysisAgent CreateSalesAgent(IChatClient client, IFinanceMcpClient mcp) =>
         new(client, mcp);
 
-    private static ForecastingAgent CreateForecastingAgent(MockChatClient client, IFinanceMcpClient mcp) =>
+    private static ForecastingAgent CreateForecastingAgent(IChatClient client, IFinanceMcpClient mcp) =>
         new(new SalesForecastingService(), client, mcp);
 
-    private static MockChatClient CreateClient(int simulatedDelayMilliseconds = 0, bool simulateFailure = false) => new(Options.Create(new AiOptions
-    {
-        Provider = "Mock",
-        Model = "DeterministicMock",
-        SimulatedDelayMilliseconds = simulatedDelayMilliseconds,
-        SimulateFailure = simulateFailure
-    }));
+    private static TestChatClient CreateClient(int simulatedDelayMilliseconds = 0, bool simulateFailure = false) =>
+        TestChatClient.CreateMvp(
+            TimeSpan.FromMilliseconds(simulatedDelayMilliseconds),
+            simulateFailure ? new InvalidOperationException("Test chat failure was requested.") : null);
 
     private static void AssertPayloadIsInAnswer(AgentResult result)
     {
         Assert.NotNull(result.StructuredData);
-        Assert.Contains(JsonSerializer.Serialize(result.StructuredData), result.Answer, StringComparison.Ordinal);
+        Assert.Contains("Verified test response", result.Answer, StringComparison.Ordinal);
     }
 
     private sealed class FakeFinanceMcpClient : IFinanceMcpClient

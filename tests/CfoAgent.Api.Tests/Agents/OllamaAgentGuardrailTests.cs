@@ -53,9 +53,9 @@ public sealed class OllamaAgentGuardrailTests
         }
 
         Assert.Equal(10, fakeClient.Prompts.Count);
-        Assert.DoesNotContain(fakeClient.Prompts, prompt => prompt.Contains("[MOCK:ORCHESTRATE]", StringComparison.Ordinal));
+        Assert.DoesNotContain(fakeClient.Prompts, prompt => prompt.Contains("ORCHESTRATE", StringComparison.Ordinal));
         Assert.All(fakeClient.RequestOptions, options => Assert.True(options?.Tools is null or { Count: 0 }));
-        Assert.Equal(256, fakeClient.GetPayloadAfterMarker("[MOCK:KNOWLEDGE]").Length);
+        Assert.Equal(256, fakeClient.GetPayloadAfterMarker("RETRIEVED_CONTEXT:").Length);
         var knowledgeResult = await orchestrator.HandleAsync(new AgentRequest(scenarios[^1].Prompt));
         Assert.Equal("data/knowledge/current-budget-and-target.md", Assert.Single(knowledgeResult.Sources).SourcePath);
     }
@@ -78,7 +78,7 @@ public sealed class OllamaAgentGuardrailTests
         Assert.Equal(AgentResponseType.Mixed, result.ResponseType);
         Assert.Equal(3, fakeClient.Prompts.Count);
         Assert.Equal($"{fakeClient.FormattingResponse}\n\n{fakeClient.FormattingResponse}", result.Answer);
-        Assert.DoesNotContain(fakeClient.Prompts, prompt => prompt.Contains("[MOCK:ORCHESTRATE]", StringComparison.Ordinal));
+        Assert.DoesNotContain(fakeClient.Prompts, prompt => prompt.Contains("ORCHESTRATE", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -207,14 +207,14 @@ public sealed class OllamaAgentGuardrailTests
             Prompts.Add(prompt);
             RequestOptions.Add(options);
 
-            var isClassification = prompt.Contains("[MOCK:CLASSIFY]", StringComparison.Ordinal);
+            var isClassification = prompt.Contains("USER_REQUEST:", StringComparison.Ordinal);
             if (!isClassification && FormattingFailure is not null)
             {
                 throw FormattingFailure;
             }
 
             var text = isClassification
-                ? ClassificationResponse ?? Classify(GetPayload(prompt, "[MOCK:CLASSIFY]"))
+                ? ClassificationResponse ?? Classify(GetPayload(prompt, "USER_REQUEST:"))
                 : FormattingResponse;
             return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, text))
             {

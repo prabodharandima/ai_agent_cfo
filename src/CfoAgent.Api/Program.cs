@@ -1,4 +1,3 @@
-using CfoAgent.Api.AI.Mock;
 using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents;
@@ -47,8 +46,6 @@ builder.Services.AddOptions<RagOptions>()
 
 builder.Services.AddOptions<AiOptions>()
     .BindConfiguration(AiOptions.SectionName)
-    .Validate(options => string.Equals(options.Provider, "Mock", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(options.Provider, "Ollama", StringComparison.OrdinalIgnoreCase), "AI:Provider must be Mock or Ollama.")
     .Validate(options => !string.IsNullOrWhiteSpace(options.Model), "AI:Model is required.")
     .Validate(options => Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var uri)
         && (string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
@@ -57,7 +54,6 @@ builder.Services.AddOptions<AiOptions>()
     .Validate(options => double.IsFinite(options.Temperature) && options.Temperature is >= 0 and <= 2, "AI:Temperature must be finite and between 0 and 2.")
     .Validate(options => options.ContextLength is >= 1_024 and <= 32_768, "AI:ContextLength must be between 1024 and 32768.")
     .Validate(options => options.MaxOutputTokens is >= 1 and <= 1_024 && options.MaxOutputTokens < options.ContextLength, "AI:MaxOutputTokens must be between 1 and 1024 and less than AI:ContextLength.")
-    .Validate(options => options.SimulatedDelayMilliseconds >= 0, "AI:SimulatedDelayMilliseconds must not be negative.")
     .ValidateOnStart();
 
 builder.Services.AddOptions<McpOptions>()
@@ -95,23 +91,12 @@ builder.Services.AddHttpClient(AiOptions.OllamaHttpClientName, (serviceProvider,
 builder.Services.AddSingleton<IChatClient>(serviceProvider =>
 {
     var ai = serviceProvider.GetRequiredService<IOptions<AiOptions>>().Value;
-
-    if (string.Equals(ai.Provider, "Mock", StringComparison.OrdinalIgnoreCase))
-    {
-        return ActivatorUtilities.CreateInstance<MockChatClient>(serviceProvider);
-    }
-
-    if (string.Equals(ai.Provider, "Ollama", StringComparison.OrdinalIgnoreCase))
-    {
-        var httpClient = serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(AiOptions.OllamaHttpClientName);
-        var transport = (IChatClient)new OllamaApiClient(httpClient, ai.Model);
-        return new OllamaChatClient(
-            transport,
-            ai,
-            serviceProvider.GetRequiredService<ILogger<OllamaChatClient>>());
-    }
-
-    throw new InvalidOperationException("AI provider configuration was not validated.");
+    var httpClient = serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(AiOptions.OllamaHttpClientName);
+    var transport = (IChatClient)new OllamaApiClient(httpClient, ai.Model);
+    return new OllamaChatClient(
+        transport,
+        ai,
+        serviceProvider.GetRequiredService<ILogger<OllamaChatClient>>());
 });
 builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>, DeterministicTokenHashEmbeddingGenerator>();
 builder.Services.AddScoped<RagDocumentIngestionService>();
@@ -244,7 +229,7 @@ app.MapGet("/", (IOptions<ApplicationOptions> applicationOptions, IOptions<AiOpt
     {
         application = application.Name,
         demoMode = application.DemoMode,
-        aiProvider = ai.Provider,
+        aiProvider = "Ollama",
         model = ai.Model
     });
 });

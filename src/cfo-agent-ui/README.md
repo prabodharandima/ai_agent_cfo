@@ -27,4 +27,4 @@ npm test -- --run
 npm run test:e2e:container
 ```
 
-The Playwright command targets the already-running Docker frontend and is deterministic when the API uses the default Mock provider. See the root [README](../../README.md) and [USER-GUIDE.md](../../USER-GUIDE.md) for deployment and provider details.
+The Playwright command targets the already-running Docker frontend. It requires the API's configured host Ollama endpoint and model to be available. See the root [README](../../README.md) and [USER-GUIDE.md](../../USER-GUIDE.md) for deployment details.
