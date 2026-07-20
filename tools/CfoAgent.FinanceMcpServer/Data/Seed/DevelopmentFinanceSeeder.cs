@@ -5,7 +5,10 @@ using Microsoft.Extensions.Options;
 
 namespace CfoAgent.FinanceMcpServer.Data.Seed;
 
-public sealed class DevelopmentFinanceSeeder(FinanceDbContext dbContext, IOptions<FinanceOptions> financeOptions)
+public sealed class DevelopmentFinanceSeeder(
+    FinanceDbContext dbContext,
+    IOptions<FinanceOptions> financeOptions,
+    TimeProvider timeProvider)
 {
     private static readonly ProductDefinition[] ProductDefinitions =
     [
@@ -23,43 +26,52 @@ public sealed class DevelopmentFinanceSeeder(FinanceDbContext dbContext, IOption
 
     public async Task SeedAsync(CancellationToken cancellationToken)
     {
-        if (await dbContext.Products.AnyAsync(cancellationToken))
-        {
-            return;
-        }
-
         var demoDate = financeOptions.Value.DemoDate;
-        var products = ProductDefinitions
-            .Select(definition => new Product
-            {
-                Code = definition.Code,
-                Name = definition.Name,
-                Category = definition.Category,
-                IsActive = true
-            })
-            .ToArray();
+        var currentDate = DateOnly.FromDateTime(timeProvider.GetLocalNow().DateTime);
+        var products = await dbContext.Products
+            .OrderBy(product => product.Code)
+            .ToArrayAsync(cancellationToken);
 
-        dbContext.Products.AddRange(products);
-
-        for (var year = demoDate.Year - 5; year < demoDate.Year; year++)
+        if (products.Length == 0)
         {
-            for (var month = 1; month <= 12; month++)
-            {
-                AddMonthlySales(products, year, month, [5, 20]);
-            }
-        }
-
-        for (var month = 1; month <= demoDate.Month; month++)
-        {
-            var saleDays = new[] { 5, 20 }
-                .Where(day => new DateOnly(demoDate.Year, month, day) <= demoDate)
+            products = ProductDefinitions
+                .Select(definition => new Product
+                {
+                    Code = definition.Code,
+                    Name = definition.Name,
+                    Category = definition.Category,
+                    IsActive = true
+                })
                 .ToArray();
 
-            AddMonthlySales(products, demoDate.Year, month, saleDays);
+            dbContext.Products.AddRange(products);
+
+            for (var year = demoDate.Year - 5; year < demoDate.Year; year++)
+            {
+                for (var month = 1; month <= 12; month++)
+                {
+                    AddMonthlySales(products, year, month, [5, 20]);
+                }
+            }
+
+            for (var month = 1; month <= demoDate.Month; month++)
+            {
+                var saleDays = new[] { 5, 20 }
+                    .Where(day => new DateOnly(demoDate.Year, month, day) <= demoDate)
+                    .ToArray();
+
+                AddMonthlySales(products, demoDate.Year, month, saleDays);
+            }
+
+            AddBudgetTargets(demoDate);
         }
 
-        AddWeeklyComparisonSales(products, demoDate);
-        AddBudgetTargets(demoDate);
+        var existingSaleDates = await dbContext.Sales
+            .Select(sale => sale.SaleDate)
+            .ToHashSetAsync(cancellationToken);
+
+        // Weekly demo rows follow the injected clock so a current-week query has seeded data after deployment.
+        AddWeeklyComparisonSales(products, currentDate, existingSaleDates);
 
         await dbContext.SaveChangesAsync(cancellationToken);
     }
@@ -94,22 +106,46 @@ public sealed class DevelopmentFinanceSeeder(FinanceDbContext dbContext, IOption
         }
     }
 
-    private void AddWeeklyComparisonSales(IReadOnlyList<Product> products, DateOnly demoDate)
+    private void AddWeeklyComparisonSales(
+        IReadOnlyList<Product> products,
+        DateOnly currentDate,
+        ISet<DateOnly> existingSaleDates)
     {
-        var currentWeekStart = demoDate.AddDays(-((int)demoDate.DayOfWeek + 6) % 7);
+        var currentWeekStart = currentDate.AddDays(-((int)currentDate.DayOfWeek + 6) % 7);
         var previousWeekStart = currentWeekStart.AddDays(-7);
 
-        AddWeekSales(products, previousWeekStart.AddDays(1), 9);
-        AddWeekSales(products, previousWeekStart.AddDays(4), 11);
-        AddWeekSales(products, currentWeekStart, 18);
-        AddWeekSales(products, currentWeekStart.AddDays(1), 20);
-        AddWeekSales(products, demoDate, 22);
+        var weeklySales = new (DateOnly SaleDate, int BaseQuantity)[]
+        {
+            (previousWeekStart.AddDays(1), 9),
+            (previousWeekStart.AddDays(4), 11),
+            (currentWeekStart, 18),
+            (currentWeekStart.AddDays(1), 20),
+            (currentDate, 22)
+        };
+
+        foreach (var weeklySale in weeklySales
+                     .Where(sale => sale.SaleDate <= currentDate)
+                     .GroupBy(sale => sale.SaleDate)
+                     .Select(group => group.Last()))
+        {
+            AddWeekSales(products, weeklySale.SaleDate, weeklySale.BaseQuantity, existingSaleDates);
+        }
     }
 
-    private void AddWeekSales(IReadOnlyList<Product> products, DateOnly saleDate, int baseQuantity)
+    private void AddWeekSales(
+        IReadOnlyList<Product> products,
+        DateOnly saleDate,
+        int baseQuantity,
+        ISet<DateOnly> existingSaleDates)
     {
+        if (!existingSaleDates.Add(saleDate))
+        {
+            return;
+        }
+
         for (var productIndex = 0; productIndex < products.Count; productIndex++)
         {
+            var orderNumber = $"ORD-{saleDate:yyyyMMdd}-{(productIndex / 2) + 1:D2}";
             var definition = ProductDefinitions[productIndex];
             var quantity = baseQuantity + (productIndex * 2);
             var grossRevenue = quantity * definition.UnitPrice;
@@ -117,7 +153,7 @@ public sealed class DevelopmentFinanceSeeder(FinanceDbContext dbContext, IOption
 
             dbContext.Sales.Add(new Sale
             {
-                OrderNumber = $"ORD-{saleDate:yyyyMMdd}-{(productIndex / 2) + 1:D2}",
+                OrderNumber = orderNumber,
                 SaleDate = saleDate,
                 Product = products[productIndex],
                 Quantity = quantity,

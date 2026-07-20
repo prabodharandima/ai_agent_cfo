@@ -1,0 +1,12 @@
+services:
+  finance-mcp:
+    networks:
+      - edge
+    ports:
+      - "127.0.0.1:18080:8080"
+
+  knowledge-mcp:
+    networks:
+      - edge
+    ports:
+      - "127.0.0.1:18081:8080"

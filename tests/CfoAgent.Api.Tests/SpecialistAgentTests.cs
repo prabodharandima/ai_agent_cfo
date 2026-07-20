@@ -8,24 +8,19 @@ using CfoAgent.Api.Features.Forecasting;
 using CfoAgent.Api.Features.Sales;
 using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Tests.Finance;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Tests;
 
 public sealed class SpecialistAgentTests
 {
-    private static readonly TimeProvider Clock = new FixedTimeProvider(new DateOnly(2026, 7, 15));
-
     [Fact]
     public async Task SalesAgentReturnsVerifiedMcpSummaryComparisonAndTopProducts()
     {
         using var client = CreateClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
         var mcp = new FinanceFake();
-        var agent = new SalesAnalysisAgent(new CfoAgentFramework(client, NullLoggerFactory.Instance, services), mcp);
-        var request = new AgentRequest("Show finance data.", "sales-session");
+        var agent = new SalesAnalysisAgent(client, mcp);
+        var request = new AgentRequest("Show finance data.");
 
         var summary = await agent.GetWeeklySummaryAsync(request, CancellationToken.None);
         var comparison = await agent.GetWeekOverWeekComparisonAsync(request, CancellationToken.None);
@@ -43,9 +38,8 @@ public sealed class SpecialistAgentTests
     public async Task ForecastingAgentReturnsFiveDeterministicForecastYearsFromMcpHistory()
     {
         using var client = CreateClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
         var mcp = new FinanceFake();
-        var agent = new ForecastingAgent(new SalesForecastingService(), new CfoAgentFramework(client, NullLoggerFactory.Instance, services), mcp);
+        var agent = new ForecastingAgent(new SalesForecastingService(), client, mcp);
 
         var result = await agent.GetForecastAsync(new AgentRequest("Give me a forecast."), CancellationToken.None);
 

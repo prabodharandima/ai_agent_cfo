@@ -99,12 +99,11 @@ public sealed class OllamaLiveIntegrationTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
 
         var chromaClient = new ChromaClient(chromaHttpClient, Options.Create(settings.Chroma));
-        var retrievalService = new FinancialKnowledgeRetrievalService(
+        IFinancialKnowledgeSearch retrievalService = new ChromaFinancialKnowledgeSearch(
             chromaClient,
             new DeterministicTokenHashEmbeddingGenerator(),
             Options.Create(settings.Rag));
-        var framework = new CfoAgentFramework(chatClient, NullLoggerFactory.Instance, services);
-        var agent = new FinancialKnowledgeAgent(retrievalService, framework, Options.Create(settings.Rag));
+        var agent = new FinancialKnowledgeAgent(retrievalService, chatClient, Options.Create(settings.Rag));
 
         var result = await agent.AnswerAsync(
             new AgentRequest("What is the annual sales target and what assumptions were used?"),

@@ -41,7 +41,7 @@ public sealed class ChromaPhaseThreeIntegrationTests
         Assert.Equal(0, ingestionResult.Failed);
         Assert.True(ingestionResult.ChunksAddedOrUpdated > 0);
 
-        var retrieval = new FinancialKnowledgeRetrievalService(chroma, embeddings, options);
+        var retrieval = new ChromaFinancialKnowledgeSearch(chroma, embeddings, options);
         await AssertTopicAsync(retrieval, "annual sales target", "budget_target", "Current Budget And Annual Target");
         await AssertTopicAsync(retrieval, "forecast planning assumptions", "forecast_assumptions", "Forecast Assumptions");
         await AssertTopicAsync(retrieval, "market discount risk", "market_risks", "Market Risks");
@@ -49,7 +49,7 @@ public sealed class ChromaPhaseThreeIntegrationTests
     }
 
     private static async Task AssertTopicAsync(
-        FinancialKnowledgeRetrievalService retrieval,
+        ChromaFinancialKnowledgeSearch retrieval,
         string query,
         string documentType,
         string documentName)

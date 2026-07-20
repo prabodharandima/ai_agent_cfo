@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using CfoAgent.Api.Agents.Configuration;
-using CfoAgent.Api.AI.Mock;
 using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Tests.Finance;
@@ -9,7 +7,6 @@ using CfoAgent.KnowledgeFileMcpServer;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Hosting;
 using FinanceMcpProgram = CfoAgent.FinanceMcpServer.Program;
 using KnowledgeMcpProgram = CfoAgent.KnowledgeFileMcpServer.Program;
@@ -32,9 +29,9 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
 
         var tools = await client.DiscoverToolsAsync(CancellationToken.None);
         var summary = await client.GetCurrentWeekSummaryAsync(CancellationToken.None);
-        var comparison = await client.GetWeekOverWeekComparisonAsync("Compare this week versus last week.", CancellationToken.None);
-        var topProducts = await client.GetCurrentMonthTopProductsAsync("Show the top products this month.", CancellationToken.None);
-        var historical = await client.GetHistoricalYearlyTotalsAsync("Forecast sales from historical totals.", CancellationToken.None);
+        var comparison = await client.GetWeekOverWeekComparisonAsync(CancellationToken.None);
+        var topProducts = await client.GetCurrentMonthTopProductsAsync(CancellationToken.None);
+        var historical = await client.GetHistoricalYearlyTotalsAsync(CancellationToken.None);
         var budget = await client.GetBudgetTargetAsync(2026, null, CancellationToken.None);
 
         Assert.Equal(
@@ -192,7 +189,6 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
 
     private static FinanceMcpClient CreateFinanceClient(IMcpToolAdapter adapter) => new(
         adapter,
-        CreateAgentFramework(),
         new FixedTimeProvider(new DateOnly(2026, 7, 15)),
         NullLogger<FinanceMcpClient>.Instance);
 
@@ -205,11 +201,6 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
         ["list_knowledge_files", "read_knowledge_file"],
         new SingleHttpClientFactory(httpClient),
         NullLogger<McpToolAdapter>.Instance);
-
-    private static CfoAgentFramework CreateAgentFramework() => new(
-        new MockChatClient(Options.Create(new AiOptions())),
-        NullLoggerFactory.Instance,
-        new EmptyServiceProvider());
 
     private static KnowledgeFileMcpOptions CreateKnowledgeOptions(bool enabled = false) => new()
     {
@@ -229,11 +220,6 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
     private sealed class SingleHttpClientFactory(HttpClient client) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => client;
-    }
-
-    private sealed class EmptyServiceProvider : IServiceProvider
-    {
-        public object? GetService(Type serviceType) => null;
     }
 
     private sealed class CountingHandler : HttpMessageHandler

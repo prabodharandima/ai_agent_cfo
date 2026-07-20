@@ -1,13 +1,15 @@
+using CfoAgent.Api.AI;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
 using CfoAgent.Api.Features.Forecasting;
 using CfoAgent.Api.Mcp;
+using Microsoft.Extensions.AI;
 
 namespace CfoAgent.Api.Agents;
 
 public sealed class ForecastingAgent(
     SalesForecastingService salesForecastingService,
-    CfoAgentFramework agentFramework,
+    IChatClient chatClient,
     IFinanceMcpClient financeMcpClient)
 {
     public async Task<AgentResult> GetForecastAsync(AgentRequest request, CancellationToken cancellationToken)
@@ -21,10 +23,11 @@ public sealed class ForecastingAgent(
 
         try
         {
-            var forecast = await GetForecastAsync(request.Message, cancellationToken);
-            var agent = agentFramework.CreateAgent(AgentDefinitions.Forecasting);
-            var session = await agent.CreateSessionAsync(cancellationToken);
-            var response = await agent.RunAsync(AgentPromptTemplates.ForForecast(forecast), session, options: null, cancellationToken);
+            var forecast = await GetForecastAsync(cancellationToken);
+            var response = await chatClient.GetResponseAsync(
+                [new ChatMessage(ChatRole.User, AgentPromptTemplates.ForForecast(forecast))],
+                new ChatOptions { Instructions = AgentDefinitions.Forecasting.SystemInstructions },
+                cancellationToken);
 
             return new AgentResult(
                 response.Text,
@@ -44,15 +47,19 @@ public sealed class ForecastingAgent(
         {
             throw;
         }
+        catch (LlmDependencyException)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             throw new InvalidOperationException("The forecasting agent could not produce a forecast.", exception);
         }
     }
 
-    private async Task<SalesForecastResult> GetForecastAsync(string userMessage, CancellationToken cancellationToken)
+    private async Task<SalesForecastResult> GetForecastAsync(CancellationToken cancellationToken)
     {
-        var historical = await financeMcpClient.GetHistoricalYearlyTotalsAsync(userMessage, cancellationToken);
+        var historical = await financeMcpClient.GetHistoricalYearlyTotalsAsync(cancellationToken);
         return salesForecastingService.Forecast(historical);
     }
 

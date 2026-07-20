@@ -1,24 +1,20 @@
 using System.Text;
+using CfoAgent.Api.AI;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
 using CfoAgent.Api.Configuration;
-using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Rag.Retrieval;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Agents;
 
 public sealed class FinancialKnowledgeAgent(
-    FinancialKnowledgeRetrievalService retrievalService,
-    CfoAgentFramework agentFramework,
-    IOptions<RagOptions> options,
-    IKnowledgeFileMcpClient? knowledgeFileMcpClient = null,
-    IOptions<McpOptions>? mcpOptions = null)
+    IFinancialKnowledgeSearch knowledgeSearch,
+    IChatClient chatClient,
+    IOptions<RagOptions> options)
 {
     private readonly RagOptions _options = options.Value;
-    private readonly bool _knowledgeFileAccessEnabled = mcpOptions is null
-        ? knowledgeFileMcpClient is not null
-        : mcpOptions.Value.KnowledgeFiles.Enabled || mcpOptions.Value.KnowledgeFiles.UseLocalFallback;
 
     public async Task<AgentResult> AnswerAsync(
         AgentRequest request,
@@ -33,7 +29,7 @@ public sealed class FinancialKnowledgeAgent(
         try
         {
             var query = new FinancialKnowledgeQuery(request.Message, topK, documentType, period);
-            var retrieval = await RetrieveAsync(query, cancellationToken);
+            var retrieval = await knowledgeSearch.RetrieveAsync(query, cancellationToken);
 
             if (!retrieval.HasSufficientKnowledge)
             {
@@ -48,9 +44,10 @@ public sealed class FinancialKnowledgeAgent(
                     null);
             }
 
-            var agent = agentFramework.CreateAgent(AgentDefinitions.FinancialKnowledge);
-            var session = await agent.CreateSessionAsync(cancellationToken);
-            var response = await agent.RunAsync(AgentPromptTemplates.ForKnowledge(BuildBoundedContext(retrieval.Sources)), session, options: null, cancellationToken);
+            var response = await chatClient.GetResponseAsync(
+                [new ChatMessage(ChatRole.User, AgentPromptTemplates.ForKnowledge(BuildBoundedContext(retrieval.Sources)))],
+                new ChatOptions { Instructions = AgentDefinitions.FinancialKnowledge.SystemInstructions },
+                cancellationToken);
 
             return new AgentResult(
                 response.Text,
@@ -68,22 +65,18 @@ public sealed class FinancialKnowledgeAgent(
         {
             throw;
         }
+        catch (VectorSearchDependencyException)
+        {
+            throw;
+        }
+        catch (LlmDependencyException)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             throw new InvalidOperationException("The financial knowledge agent could not retrieve an answer.", exception);
         }
-    }
-
-    private async Task<FinancialKnowledgeRetrievalResult> RetrieveAsync(
-        FinancialKnowledgeQuery query,
-        CancellationToken cancellationToken)
-    {
-        if (_knowledgeFileAccessEnabled && knowledgeFileMcpClient is not null)
-        {
-            await knowledgeFileMcpClient.ListFilesAsync(cancellationToken);
-        }
-
-        return await retrievalService.RetrieveAsync(query, cancellationToken);
     }
 
     private string BuildBoundedContext(IReadOnlyList<FinancialKnowledgeSource> sources)

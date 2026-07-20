@@ -1,6 +1,7 @@
 using System.Net;
 using CfoAgent.Api.AI.Mock;
 using CfoAgent.Api.AI.Ollama;
+using CfoAgent.Api.Agents;
 using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Tests.Api;
 using Microsoft.AspNetCore.Hosting;
@@ -53,6 +54,17 @@ public sealed class AiProviderRegistrationTests
         _ = factory.Services.GetRequiredService<IChatClient>();
 
         Assert.Equal(0, requestCounter.RequestCount);
+    }
+
+    [Fact]
+    public async Task DependencyInjectionResolvesTheCompleteApplicationGraph()
+    {
+        await using var factory = new ChatApiFactory();
+        using var scope = factory.Services.CreateScope();
+
+        var orchestrator = scope.ServiceProvider.GetRequiredService<CfoOrchestratorAgent>();
+
+        Assert.NotNull(orchestrator);
     }
 
     [Theory]

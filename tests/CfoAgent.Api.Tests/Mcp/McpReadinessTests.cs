@@ -41,6 +41,23 @@ public sealed class McpReadinessTests
     }
 
     [Fact]
+    public async Task UnhealthyWhenFinanceRequiredCapabilityIsMissing()
+    {
+        var finance = new StubFinanceRemoteClient
+        {
+            Discover = _ => throw new McpDependencyException(
+                "Finance MCP",
+                McpDependencyFailureKind.CapabilityMismatch)
+        };
+        var check = CreateCheck(finance, financeEnabled: true);
+
+        var result = await check.CheckHealthAsync(new HealthCheckContext(), CancellationToken.None);
+
+        Assert.Equal(HealthStatus.Unhealthy, result.Status);
+        Assert.Equal("Finance MCP is unavailable.", result.Description);
+    }
+
+    [Fact]
     public async Task ReadinessCallerCancellationPropagates()
     {
         var finance = new StubFinanceRemoteClient
@@ -77,6 +94,7 @@ public sealed class McpReadinessTests
             }
         }),
         finance,
+        new StubKnowledgeRemoteClient(),
         new StubKnowledgeClient());
 
     private sealed class StubFinanceRemoteClient : IFinanceMcpRemoteClient
@@ -102,6 +120,18 @@ public sealed class McpReadinessTests
 
     private sealed class StubKnowledgeClient : IKnowledgeFileMcpClient
     {
+        public Task<IReadOnlyList<string>> ListFilesAsync(CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<string> ReadFileAsync(string relativePath, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class StubKnowledgeRemoteClient : IKnowledgeFileMcpRemoteClient
+    {
+        public Task<IReadOnlyList<string>> DiscoverToolsAsync(CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<IReadOnlyList<string>> ListFilesAsync(CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 

@@ -1,8 +1,10 @@
 using System.Diagnostics;
-using CfoAgent.Api.AI.Ollama;
+using CfoAgent.Api.AI;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
 using CfoAgent.Api.Mcp;
+using CfoAgent.Api.Rag.Retrieval;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CfoAgent.Api.Agents;
@@ -11,10 +13,10 @@ public sealed class CfoOrchestratorAgent(
     SalesAnalysisAgent salesAnalysisAgent,
     ForecastingAgent forecastingAgent,
     FinancialKnowledgeAgent financialKnowledgeAgent,
-    CfoAgentFramework agentFramework,
+    AgentResultComposer resultComposer,
+    IChatClient chatClient,
     ILogger<CfoOrchestratorAgent>? logger = null)
 {
-    private const int MaximumSpecialistInvocations = 2;
     private const int MaximumClassificationResponseCharacters = 64;
     private readonly ILogger<CfoOrchestratorAgent> _logger = logger ?? NullLogger<CfoOrchestratorAgent>.Instance;
 
@@ -22,9 +24,10 @@ public sealed class CfoOrchestratorAgent(
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
 
-        var agent = agentFramework.CreateAgent(AgentDefinitions.CfoOrchestrator);
-        var session = await agent.CreateSessionAsync(cancellationToken);
-        var response = await agent.RunAsync(AgentPromptTemplates.ForClassification(message), session, options: null, cancellationToken);
+        var response = await chatClient.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, AgentPromptTemplates.ForClassification(message))],
+            new ChatOptions { Instructions = AgentDefinitions.CfoOrchestrator.SystemInstructions },
+            cancellationToken);
 
         return TryParseIntent(response.Text, out var intent)
             ? intent
@@ -54,7 +57,7 @@ public sealed class CfoOrchestratorAgent(
 
             var result = specialistResults.Length == 0
                 ? UnsupportedResult()
-                : await ComposeAsync(specialistResults, cancellationToken);
+                : resultComposer.Compose(specialistResults);
             _logger.LogInformation(
                 "CFO request completed. ResponseType: {ResponseType}; AgentCount: {AgentCount}; DurationMilliseconds: {DurationMilliseconds}",
                 result.ResponseType,
@@ -67,11 +70,15 @@ public sealed class CfoOrchestratorAgent(
             _logger.LogWarning("CFO request cancelled. DurationMilliseconds: {DurationMilliseconds}", stopwatch.ElapsedMilliseconds);
             throw;
         }
-        catch (OllamaProviderException)
+        catch (LlmDependencyException)
         {
             throw;
         }
         catch (McpDependencyException)
+        {
+            throw;
+        }
+        catch (VectorSearchDependencyException)
         {
             throw;
         }
@@ -88,37 +95,7 @@ public sealed class CfoOrchestratorAgent(
         var knowledgeTask = financialKnowledgeAgent.AnswerAsync(request, cancellationToken: cancellationToken);
         var results = await Task.WhenAll(forecastTask, knowledgeTask);
 
-        if (results.Length > MaximumSpecialistInvocations)
-        {
-            throw new InvalidOperationException("The configured specialist invocation limit was exceeded.");
-        }
-
         return results;
-    }
-
-    private async Task<AgentResult> ComposeAsync(IReadOnlyList<AgentResult> specialistResults, CancellationToken cancellationToken)
-    {
-        var agent = agentFramework.CreateAgent(AgentDefinitions.CfoOrchestrator);
-        var session = await agent.CreateSessionAsync(cancellationToken);
-        var verifiedOutputs = specialistResults.Select(result => new OrchestratedSpecialistResult(
-            result.AgentNames.Single(),
-            result.ResponseType,
-            result.StructuredData));
-        var response = await agent.RunAsync(
-            AgentPromptTemplates.ForOrchestration(verifiedOutputs),
-            session,
-            options: null,
-            cancellationToken);
-
-        return new AgentResult(
-            response.Text,
-            specialistResults.Count == 1 ? specialistResults[0].ResponseType : AgentResponseType.Mixed,
-            specialistResults.SelectMany(result => result.AgentNames).Distinct(StringComparer.Ordinal).ToArray(),
-            specialistResults.Count == 1 ? specialistResults[0].StructuredData : verifiedOutputs.ToArray(),
-            specialistResults.SelectMany(result => result.Sources).Distinct().ToArray(),
-            specialistResults.SelectMany(result => result.Assumptions).Distinct(StringComparer.Ordinal).ToArray(),
-            specialistResults.SelectMany(result => result.Warnings).Distinct(StringComparer.Ordinal).ToArray(),
-            specialistResults.Select(result => result.DataPeriod).FirstOrDefault(period => period is not null));
     }
 
     private static AgentResult UnsupportedResult() => new(

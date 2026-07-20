@@ -1,14 +1,14 @@
 using CfoAgent.Api.Configuration;
-using CfoAgent.Api.Rag.Chroma;
+using CfoAgent.Api.Rag.Retrieval;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 
-namespace CfoAgent.Api.Rag.Retrieval;
+namespace CfoAgent.Api.Rag.Chroma;
 
-public sealed class FinancialKnowledgeRetrievalService(
+public sealed class ChromaFinancialKnowledgeSearch(
     ChromaClient chromaClient,
     IEmbeddingGenerator<string, Embedding<float>> embeddingGenerator,
-    IOptions<RagOptions> options)
+    IOptions<RagOptions> options) : IFinancialKnowledgeSearch
 {
     private readonly RagOptions _options = options.Value;
 

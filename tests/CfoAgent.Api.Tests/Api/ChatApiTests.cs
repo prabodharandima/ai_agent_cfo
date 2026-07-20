@@ -64,6 +64,41 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
         }
     }
 
+    [Fact]
+    public async Task PostChat_PreservesTheMixedResponseContract()
+    {
+        using var client = _factory.CreateClient();
+
+        using var response = await client.PostAsJsonAsync(
+            "/api/chat",
+            new { message = "Give me the sales forecast with assumptions and risks." });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var body = document.RootElement;
+        Assert.Equal("mixed", body.GetProperty("responseType").GetString());
+        Assert.Equal(JsonValueKind.Array, body.GetProperty("structuredData").ValueKind);
+        Assert.Equal(2, body.GetProperty("structuredData").GetArrayLength());
+        Assert.Contains("CfoOrchestratorAgent", body.GetProperty("agentNames").EnumerateArray().Select(value => value.GetString()));
+        Assert.Contains("ForecastingAgent", body.GetProperty("agentNames").EnumerateArray().Select(value => value.GetString()));
+        Assert.Contains("FinancialKnowledgeAgent", body.GetProperty("agentNames").EnumerateArray().Select(value => value.GetString()));
+        Assert.NotEmpty(body.GetProperty("answer").GetString()!);
+    }
+
+    [Fact]
+    public async Task PostChat_PreservesTheCallerConversationId()
+    {
+        using var client = _factory.CreateClient();
+
+        using var response = await client.PostAsJsonAsync(
+            "/api/chat",
+            new { conversationId = "cleanup-contract-001", message = "Give me the sales summary of this week." });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal("cleanup-contract-001", document.RootElement.GetProperty("conversationId").GetString());
+    }
+
     [Theory]
     [InlineData("{\"message\":\"   \"}")]
     [InlineData("{}")]

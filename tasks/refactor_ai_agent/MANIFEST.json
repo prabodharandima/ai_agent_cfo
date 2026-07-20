@@ -1,0 +1,17 @@
+{
+  "target_folder": "tasks/refactor_ai_agent",
+  "task_count": 6,
+  "files": [
+    "MODEL-AND-REASONING-GUIDE.md",
+    "README-REFACTOR-AI-AGENT.md",
+    "READY-TO-PASTE-CODEX-PROMPT.md",
+    "REFACTOR-AI-AGENT-EXECUTION-ORDER.md",
+    "TASK-RAA-001-current-architecture-and-complexity-assessment.md",
+    "TASK-RAA-002-target-architecture-and-refactor-plan.md",
+    "TASK-RAA-003-simplify-orchestrator-and-agent-boundaries.md",
+    "TASK-RAA-004-simplify-ports-adapters-and-dependency-flow.md",
+    "TASK-RAA-005-remove-accidental-complexity-and-dead-abstractions.md",
+    "TASK-RAA-006-regression-documentation-and-final-gate.md",
+    "MANIFEST.json"
+  ]
+}

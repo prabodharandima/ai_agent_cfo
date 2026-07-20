@@ -18,7 +18,11 @@ The solution remains one ASP.NET Core business monolith with four in-process age
 
 ## MCP integration refactor - Complete
 
-The current Streamable HTTP clients use one minimal generic `McpToolAdapter` for SDK initialization, `tools/list` discovery, approved-tool caching, bounded tool definition forwarding to `IChatClient`, selected-name/canonical-argument validation, and `tools/call`. Tool discovery is constrained by configured Finance and Knowledge allow-lists; a model cannot choose an arbitrary endpoint, tool, or financial argument. The existing four-agent routing and typed Finance/Knowledge facades remain to protect deterministic result contracts, filesystem restrictions, and ChromaDB RAG behavior. Results and validation evidence are recorded in `docs/MCP-INTEGRATION-REFACTOR-RESULTS.md`.
+The current Streamable HTTP clients use one minimal generic `McpToolAdapter` for SDK initialization, `tools/list` discovery, approved-tool caching, requested-operation validation, and `tools/call`. Tool discovery is constrained by configured Finance and Knowledge allow-lists. `FinanceMcpClient` directly invokes the fixed tool for each typed operation with deterministic canonical arguments; a model cannot choose an endpoint, tool, or financial argument. The existing four-agent routing and typed Finance/Knowledge facades remain to protect deterministic result contracts, filesystem restrictions, and ChromaDB RAG behavior. Results and validation evidence are recorded in `docs/MCP-INTEGRATION-REFACTOR-RESULTS.md`.
+
+## CfoAgent.Api architecture refactor - Complete
+
+`CfoAgent.Api` now has one explicit `CfoOrchestratorAgent`, three focused specialist workers, and a concrete deterministic `AgentResultComposer`. HTTP stays in `ChatEndpoints`; the orchestrator only classifies and routes bounded intents; specialists use `IChatClient`, typed MCP ports, or `IFinancialKnowledgeSearch` as appropriate. `McpToolAdapter` owns MCP SDK transport, and `ChromaFinancialKnowledgeSearch` owns the Chroma-backed vector-search adapter. The API has no PostgreSQL dependency, no Ollama-specific agent code, no MCP transport code in agents, and no second LLM composition pass. The completed refactor and final validation evidence are recorded in `docs/CFO-AGENT-API-REFACTOR-RESULTS.md`.
 
 ## Validation
 

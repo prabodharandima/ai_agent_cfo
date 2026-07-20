@@ -1,12 +1,11 @@
 using System.Text.Json;
-using ModelContextProtocol.Client;
 
 namespace CfoAgent.Api.Mcp;
 
 public interface IMcpToolAdapter
 {
-    Task<IReadOnlyList<McpClientTool>> GetApprovedToolsAsync(
-        IEnumerable<string>? operationToolNames,
+    Task<IReadOnlyList<string>> GetApprovedToolNamesAsync(
+        IEnumerable<string>? requiredToolNames,
         CancellationToken cancellationToken);
 
     Task<JsonElement> CallApprovedToolAsync(
