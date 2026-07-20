@@ -31,7 +31,7 @@ Set `AI_PROVIDER=Mock` for the offline default, or set `AI_PROVIDER=Ollama` and 
 docker compose up --build -d
 ```
 
-Open `http://localhost:5173`. The API diagnostic port is `http://localhost:5260`; normal browser calls use the Nginx same-origin `/api` proxy. The frontend, API, Finance MCP, Knowledge MCP, PostgreSQL, ChromaDB, migration/seed job, and RAG ingestion job start in dependency order. Named PostgreSQL and ChromaDB volumes are preserved.
+Open `http://localhost:5173`. The API diagnostic port is `http://localhost:5260`, and pgAdmin is available locally at `http://localhost:5050`; normal browser calls use the Nginx same-origin `/api` proxy. The frontend, API, Finance MCP, Knowledge MCP, PostgreSQL, pgAdmin, ChromaDB, migration/seed job, and RAG ingestion job start in dependency order. Named PostgreSQL, pgAdmin, and ChromaDB volumes are preserved.
 
 Use `docker compose ps`, `docker compose logs --no-color`, and `docker compose down` for operations. Do not use `down -v` unless intentionally deleting local PostgreSQL and ChromaDB data.
 
@@ -52,7 +52,7 @@ Default Docker configuration is `AI_PROVIDER=Mock` and `AI_MODEL=DeterministicMo
 - Finance MCP is the only PostgreSQL owner. The API has no database connection string or Finance fallback; its dependency failure is a sanitized HTTP 503.
 - Knowledge File MCP permits only list/read beneath `data/knowledge`; it is mounted read-only in containers. Its Development-only fallback is disabled in Compose.
 - ChromaDB remains the semantic source retrieval and citation store. It does not contain finance transactions.
-- Only frontend `5173` and API diagnostic `5260` are published. PostgreSQL, ChromaDB, and MCP services remain internal.
+- Frontend `5173`, API diagnostic `5260`, and pgAdmin `5050` are published on the local machine. PostgreSQL, ChromaDB, and MCP services remain internal; pgAdmin reaches PostgreSQL through the internal Docker network.
 
 ## Validation
 

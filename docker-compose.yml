@@ -17,6 +17,22 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:?Set PGADMIN_DEFAULT_EMAIL in .env}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?Set PGADMIN_DEFAULT_PASSWORD in .env}
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    ports:
+      - "127.0.0.1:${CFO_PGADMIN_PORT:?Set CFO_PGADMIN_PORT in .env}:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    restart: unless-stopped
+
   finance-db-init:
     image: cfo-agent-finance-mcp:local
     build:
@@ -194,3 +210,4 @@ networks:
 volumes:
   postgres_data:
   chroma_data:
+  pgadmin_data:
