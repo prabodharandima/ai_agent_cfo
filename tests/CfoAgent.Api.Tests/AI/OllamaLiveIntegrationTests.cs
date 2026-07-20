@@ -129,7 +129,6 @@ public sealed class OllamaLiveIntegrationTests
     private static WebApplicationFactory<Program> CreateChatApiFactory(AiOptions options) =>
         new ChatApiFactory().WithWebHostBuilder(builder =>
         {
-            builder.UseSetting("AI:Provider", "Ollama");
             builder.UseSetting("AI:Model", options.Model);
             builder.UseSetting("AI:BaseUrl", options.BaseUrl);
             builder.UseSetting("AI:TimeoutSeconds", options.TimeoutSeconds.ToString());
@@ -266,7 +265,6 @@ internal sealed record LiveOllamaTestSettings(AiOptions Ai, ChromaOptions Chroma
         var configuration = new ConfigurationBuilder()
             .SetBasePath(root)
             .AddJsonFile("src/CfoAgent.Api/appsettings.json", optional: false)
-            .AddJsonFile("src/CfoAgent.Api/appsettings.Ollama.example.json", optional: false)
             .AddEnvironmentVariables()
             .Build();
         var ai = configuration.GetRequiredSection(AiOptions.SectionName).Get<AiOptions>()

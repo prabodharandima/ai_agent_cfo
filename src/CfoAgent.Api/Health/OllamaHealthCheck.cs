@@ -31,12 +31,6 @@ public sealed class OllamaHealthCheck : IHealthCheck
         var options = aiOptions.Value;
         var stopwatch = Stopwatch.StartNew();
 
-        if (!string.Equals(options.Provider, "Ollama", StringComparison.OrdinalIgnoreCase))
-        {
-            LogOutcome(options, stopwatch, "Skipped", "NotSelected");
-            return HealthCheckResult.Healthy("Ollama is not selected.");
-        }
-
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(options.TimeoutSeconds > MaximumProbeTimeout.TotalSeconds
             ? MaximumProbeTimeout
@@ -102,7 +96,7 @@ public sealed class OllamaHealthCheck : IHealthCheck
     {
         logger.LogInformation(
             "Ollama operation completed. Provider: {Provider}; Model: {Model}; Operation: {Operation}; DurationMilliseconds: {DurationMilliseconds}; Outcome: {Outcome}; FailureCategory: {FailureCategory}",
-            options.Provider,
+            "Ollama",
             options.Model,
             "readiness",
             stopwatch.ElapsedMilliseconds,

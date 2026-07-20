@@ -6,8 +6,6 @@ public sealed class AiOptions
 
     public const string OllamaHttpClientName = "Ollama";
 
-    public string Provider { get; init; } = string.Empty;
-
     public string Model { get; init; } = string.Empty;
 
     public string BaseUrl { get; init; } = string.Empty;
@@ -20,7 +18,4 @@ public sealed class AiOptions
 
     public int MaxOutputTokens { get; init; }
 
-    public int SimulatedDelayMilliseconds { get; init; }
-
-    public bool SimulateFailure { get; init; }
 }

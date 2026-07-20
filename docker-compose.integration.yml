@@ -7,8 +7,7 @@ services:
     command: ["--ingest-rag"]
     environment:
       ASPNETCORE_ENVIRONMENT: Development
-      AI__Provider: Mock
-      AI__Model: DeterministicMock
+      AI__Model: llama3.2:3b
       Chroma__BaseUrl: http://chromadb:8000
       Rag__KnowledgeFilesRoot: /knowledge
       Mcp__Finance__Enabled: "false"
@@ -28,9 +27,7 @@ services:
 
   api:
     environment:
-      AI__Provider: Mock
-      AI__Model: DeterministicMock
-      AI__SimulatedDelayMilliseconds: "250"
+      AI__Model: llama3.2:3b
       Mcp__Finance__Enabled: "true"
       Mcp__KnowledgeFiles__Enabled: "true"
       Mcp__KnowledgeFiles__UseLocalFallback: "false"

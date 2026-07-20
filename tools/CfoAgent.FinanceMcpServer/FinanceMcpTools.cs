@@ -156,18 +156,46 @@ public sealed class FinanceMcpTools(FinanceDbContext dbContext)
     {
         var sales = await dbContext.Sales.AsNoTracking()
             .Where(sale => sale.SaleDate >= start && sale.SaleDate <= end)
-            .Select(sale => new SaleLine(sale.OrderNumber, sale.Product.Code, sale.Product.Name, sale.SaleDate, sale.Quantity, sale.UnitPrice, sale.DiscountAmount, sale.UnitCost))
+            .Select(sale => new SaleLine(
+                sale.OrderNumber,
+                sale.Product.Code,
+                sale.Product.Name,
+                sale.SaleDate,
+                sale.Quantity,
+                sale.UnitPrice,
+                sale.DiscountAmount,
+                sale.UnitCost)
+            )
             .ToListAsync(cancellationToken);
+
         var revenue = sales.Sum(sale => sale.Quantity * sale.UnitPrice - sale.DiscountAmount);
+
         var cost = sales.Sum(sale => sale.Quantity * sale.UnitCost);
+
         var orders = sales.Select(sale => sale.OrderNumber).Distinct(StringComparer.Ordinal).Count();
+
         var top = sales.GroupBy(sale => new { sale.ProductCode, sale.ProductName })
             .Select(group => new McpTopProduct(group.Key.ProductCode, group.Key.ProductName, group.Sum(sale => sale.Quantity), group.Sum(sale => sale.Quantity * sale.UnitPrice - sale.DiscountAmount), group.Sum(sale => sale.Quantity * sale.UnitPrice - sale.DiscountAmount - sale.Quantity * sale.UnitCost)))
             .OrderByDescending(product => product.NetRevenue).ThenBy(product => product.ProductCode, StringComparer.Ordinal).FirstOrDefault();
+
         var warnings = new List<string>();
-        if (sales.Count == 0) warnings.Add("No sales data is available for this period.");
-        if (revenue == 0m) warnings.Add("Gross margin percentage is unavailable because net revenue is zero.");
-        return new(new(start.ToString("yyyy-MM-dd"), end.ToString("yyyy-MM-dd")), revenue, cost, revenue - cost, revenue == 0m ? 0m : (revenue - cost) / revenue * 100m, sales.Sum(sale => sale.Quantity), orders, orders == 0 ? 0m : revenue / orders, top, warnings);
+        if (sales.Count == 0)
+            warnings.Add("No sales data is available for this period.");
+        if (revenue == 0m)
+            warnings.Add("Gross margin percentage is unavailable because net revenue is zero.");
+
+        return new(
+            new(start.ToString("yyyy-MM-dd"), end.ToString("yyyy-MM-dd")),
+            revenue,
+            cost,
+            revenue - cost,
+            revenue == 0m ? 0m : (revenue - cost) / revenue * 100m,
+            sales.Sum(sale => sale.Quantity),
+            orders,
+            orders == 0 ? 0m : revenue / orders,
+            top,
+            warnings
+        );
     }
 
     private static bool TryGetPeriod(string startText, string endText, out DateOnly start, out DateOnly end, out string error)

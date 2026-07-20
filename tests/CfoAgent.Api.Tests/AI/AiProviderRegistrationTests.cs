@@ -1,5 +1,4 @@
 using System.Net;
-using CfoAgent.Api.AI.Mock;
 using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Agents;
 using CfoAgent.Api.Configuration;
@@ -8,7 +7,9 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Tests.AI;
@@ -16,20 +17,9 @@ namespace CfoAgent.Api.Tests.AI;
 public sealed class AiProviderRegistrationTests
 {
     [Fact]
-    public async Task DefaultConfiguration_RegistersOnlyTheMockChatClient()
+    public async Task DefaultConfiguration_RegistersOnlyTheOllamaChatClientWithoutAProviderSelection()
     {
-        await using var factory = new ChatApiFactory();
-
-        var chatClients = factory.Services.GetServices<IChatClient>().ToArray();
-
-        Assert.Single(chatClients);
-        Assert.IsType<MockChatClient>(chatClients[0]);
-    }
-
-    [Fact]
-    public async Task ValidOllamaConfiguration_RegistersOnlyTheOllamaChatClient()
-    {
-        await using var factory = CreateFactory(builder => ConfigureOllama(builder));
+        await using var factory = CreateFactory(static _ => { });
 
         var chatClients = factory.Services.GetServices<IChatClient>().ToArray();
 
@@ -38,12 +28,34 @@ public sealed class AiProviderRegistrationTests
     }
 
     [Fact]
+    public async Task DefaultConfiguration_BindsTheOllamaSettingsWithoutAProviderSelection()
+    {
+        await using var factory = CreateFactory(static _ => { });
+
+        var configuration = factory.Services.GetRequiredService<IConfiguration>();
+        var options = factory.Services.GetRequiredService<IOptions<AiOptions>>().Value;
+
+        Assert.Null(configuration["AI:Provider"]);
+        Assert.Equal("llama3.2:3b", options.Model);
+        Assert.Equal("http://localhost:11434", options.BaseUrl);
+    }
+
+    [Fact]
+    public void ProductionAssembly_DoesNotContainMockChatClient()
+    {
+        var productionTypes = typeof(Program).Assembly.GetTypes();
+
+        Assert.DoesNotContain(productionTypes, type =>
+            string.Equals(type.Name, "MockChatClient", StringComparison.Ordinal)
+            || string.Equals(type.Namespace, "CfoAgent.Api.AI.Mock", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task OllamaRegistration_DoesNotSendAnHttpRequestDuringStartupOrResolution()
     {
         var requestCounter = new RequestCountingHandler();
         await using var factory = CreateFactory(builder =>
         {
-            ConfigureOllama(builder);
             builder.ConfigureTestServices(services =>
             {
                 services.AddHttpClient(AiOptions.OllamaHttpClientName)
@@ -68,7 +80,6 @@ public sealed class AiProviderRegistrationTests
     }
 
     [Theory]
-    [InlineData("AI:Provider", "Unsupported", "AI:Provider")]
     [InlineData("AI:BaseUrl", "ftp://localhost:11434", "AI:BaseUrl")]
     [InlineData("AI:Model", "", "AI:Model")]
     [InlineData("AI:TimeoutSeconds", "0", "AI:TimeoutSeconds")]
@@ -85,18 +96,11 @@ public sealed class AiProviderRegistrationTests
     }
 
     private static WebApplicationFactory<Program> CreateFactory(Action<IWebHostBuilder> configure) =>
-        new ChatApiFactory().WithWebHostBuilder(configure);
-
-    private static void ConfigureOllama(IWebHostBuilder builder)
-    {
-        builder.UseSetting("AI:Provider", "Ollama");
-        builder.UseSetting("AI:Model", "llama3.2:3b");
-        builder.UseSetting("AI:BaseUrl", "http://localhost:11434");
-        builder.UseSetting("AI:TimeoutSeconds", "120");
-        builder.UseSetting("AI:Temperature", "0");
-        builder.UseSetting("AI:ContextLength", "4096");
-        builder.UseSetting("AI:MaxOutputTokens", "512");
-    }
+        new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureLogging(logging => logging.ClearProviders());
+            configure(builder);
+        });
 
     private sealed class RequestCountingHandler : HttpMessageHandler
     {

@@ -1,7 +1,6 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using CfoAgent.Api.AI.Mock;
 using CfoAgent.Api.Agents;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
@@ -15,6 +14,7 @@ using CfoAgent.Api.Rag.Retrieval;
 using CfoAgent.Api.Tests.Finance;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
+using CfoAgent.Api.Tests.AI;
 
 namespace CfoAgent.Api.Tests.Mcp;
 
@@ -86,7 +86,7 @@ public sealed class AgentMcpWiringTests
     }
 
     [Fact]
-    public async Task ForecastingAgentKeepsCalculationsInDeterministicCodeBeforeMockFormatting()
+    public async Task ForecastingAgentKeepsCalculationsInDeterministicCodeBeforeLlmFormatting()
     {
         var mcp = new StubFinanceMcpClient { Historical = _ => Task.FromResult(CreateHistoricalTotals()) };
         using var client = CreateMockClient();
@@ -148,7 +148,7 @@ public sealed class AgentMcpWiringTests
     }
 
     [Fact]
-    public async Task FinancialAgentsGiveMockLlmOnlyPrecalculatedStructuredValues()
+    public async Task FinancialAgentsGiveTheLlmOnlyPrecalculatedStructuredValues()
     {
         var mcpSummary = CreateSummary(1234m);
         var mcp = new StubFinanceMcpClient { Summary = _ => Task.FromResult(mcpSummary) };
@@ -162,14 +162,14 @@ public sealed class AgentMcpWiringTests
     }
 
     private static SalesAnalysisAgent CreateSalesAgent(
-        MockChatClient client,
+        IChatClient client,
         IFinanceMcpClient mcp)
     {
         return new SalesAnalysisAgent(client, mcp);
     }
 
     private static ForecastingAgent CreateForecastingAgent(
-        MockChatClient client,
+        IChatClient client,
         IFinanceMcpClient mcp)
     {
         return new ForecastingAgent(
@@ -180,7 +180,7 @@ public sealed class AgentMcpWiringTests
 
     private static FinancialKnowledgeAgent CreateKnowledgeAgent(
         HttpMessageHandler handler,
-        MockChatClient client)
+        IChatClient client)
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000/") };
         var chroma = new ChromaClient(httpClient, Options.Create(new ChromaOptions
@@ -229,11 +229,7 @@ public sealed class AgentMcpWiringTests
         ],
         Array.Empty<string>());
 
-    private static MockChatClient CreateMockClient() => new(Options.Create(new AiOptions
-    {
-        Provider = "Mock",
-        Model = "DeterministicMock"
-    }));
+    private static TestChatClient CreateMockClient() => TestChatClient.CreateMvp();
 
     private sealed class StubFinanceMcpClient : IFinanceMcpClient
     {

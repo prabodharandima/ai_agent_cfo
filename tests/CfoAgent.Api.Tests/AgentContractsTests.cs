@@ -37,7 +37,7 @@ public sealed class AgentContractsTests
         Assert.Equal("Verified presentation.", result.Answer);
         Assert.Equal(AgentDefinitions.SalesAnalysis.SystemInstructions, Assert.Single(client.Options).Instructions);
         Assert.True(Assert.Single(client.Options).Tools is null or { Count: 0 });
-        Assert.Contains("[MOCK:SALES_SUMMARY]", Assert.Single(client.Prompts), StringComparison.Ordinal);
+        Assert.Contains("VERIFIED_DATA:", Assert.Single(client.Prompts), StringComparison.Ordinal);
     }
 
     [Fact]

@@ -14,7 +14,7 @@ The document also explains the services that `CfoAgent.Api` depends on:
 - Knowledge File MCP for restricted raw-file access;
 - ChromaDB for semantic document search;
 - PostgreSQL for Finance MCP persistence;
-- Mock and Ollama language-model providers;
+- Ollama language-model provider;
 - the React frontend and Docker network where they affect API requests.
 
 Detailed frontend design and the internal business design of external services are outside the main focus. They are described only enough to explain their relationship with the API.
@@ -31,13 +31,13 @@ the following happens:
 
 1. The frontend sends the text to `POST /api/chat`.
 2. `CfoAgent.Api` checks that the request contains a message and that it is not too long.
-3. `CfoOrchestratorAgent` asks the selected language-model provider to return one allowed intent name. For this prompt, the intent is `SalesComparison`.
+3. `CfoOrchestratorAgent` asks Ollama to return one allowed intent name. For this prompt, the intent is `SalesComparison`.
 4. The orchestrator selects `SalesAnalysisAgent` using an explicit C# switch.
 5. The sales agent calls the typed Finance MCP client.
 6. The Finance client selects the fixed `compare_sales_periods` tool and creates the current-week and previous-week date arguments in C#.
 7. The generic MCP adapter connects to Finance MCP, discovers and approves tools, then calls the selected tool.
 8. Finance MCP reads PostgreSQL and calculates the comparison deterministically. Deterministic means the same inputs produce the same calculated values without asking an LLM to do the mathematics.
-9. The sales agent gives the verified comparison to Mock or Ollama and asks it only to explain the data in concise language.
+9. The sales agent gives the verified comparison to Ollama and asks it only to explain the data in concise language.
 10. The API returns both the prose answer and the authoritative structured comparison.
 
 The LLM does not choose the database, MCP server, MCP tool, dates, or financial calculations in this flow.
@@ -53,8 +53,7 @@ The LLM does not choose the database, MCP server, MCP tool, dates, or financial 
 | RAG initializer | One-shot `CfoAgent.Api --ingest-rag` process that reads Markdown and loads ChromaDB | Runs before the API container starts; it is not a chat request |
 | ChromaDB | Stores and searches indexed finance-document chunks | `FinancialKnowledgeAgent` reaches it through `IFinancialKnowledgeSearch` |
 | PostgreSQL | Stores products, sales, and budget targets | Owned and accessed only by Finance MCP |
-| Mock LLM | Offline deterministic classification and answer formatting | Default `IChatClient` implementation |
-| Ollama | Optional local language model running on Windows | Alternative `IChatClient`; API containers reach it through `host.docker.internal` |
+| Ollama | Local language model running on Windows | The only runtime `IChatClient`; API containers reach it through `host.docker.internal` |
 | pgAdmin | Optional browser administration tool for PostgreSQL | Operational tool only; not part of an application request |
 
 ```mermaid
@@ -71,8 +70,7 @@ flowchart LR
     Files -->|read-only ingestion mount| RagInit[CfoAgent.Api --ingest-rag]
     RagInit -->|upsert chunks and vectors| Chroma
 
-    API -->|default| Mock[Mock LLM]
-    API -->|optional| Ollama[Ollama on Windows host]
+    API --> Ollama[Ollama on Windows host]
 ```
 
 The dotted Knowledge MCP line is intentional. It represents an available operational integration, not the current semantic knowledge-answer path. Knowledge chat uses ChromaDB. The separate `rag-init` line is also intentional: the API project reads source Markdown only while it is building the ChromaDB index; the normal API container does not mount or read those files for a chat answer.
@@ -145,7 +143,6 @@ flowchart TB
     FinancePort[IFinanceMcpClient port]
     VectorPort[IFinancialKnowledgeSearch port]
 
-    Mock[MockChatClient]
     Ollama[OllamaChatClient]
     FinanceClient[FinanceMcpClient]
     McpAdapter[McpToolAdapter]
@@ -167,7 +164,6 @@ flowchart TB
     Forecast --> FinancePort
     Knowledge --> VectorPort
 
-    ChatPort --> Mock
     ChatPort --> Ollama
     FinancePort --> FinanceClient --> McpAdapter
     VectorPort --> ChromaAdapter --> ChromaClient
@@ -191,7 +187,7 @@ On success, the public response contains the prose answer, a stable response typ
 
 ### LLM abstraction
 
-Application code depends on `Microsoft.Extensions.AI.IChatClient`. `MockChatClient` and `OllamaChatClient` implement this contract. Agents do not contain Ollama transport code.
+Application code depends on `Microsoft.Extensions.AI.IChatClient`. `OllamaChatClient` is the runtime implementation. Tests inject test-local `IChatClient` doubles, and agents do not contain Ollama transport code.
 
 ### MCP adapter and typed client
 
@@ -346,7 +342,7 @@ The orchestrator calls ChromaDB only indirectly:
 
 Sales Summary, Sales Comparison, Top Products, and Forecast do not call ChromaDB. Unsupported requests do not call it either.
 
-The prompt "What does gross margin mean?" is not guaranteed to reach Knowledge with the current bounded classifier. It lacks the deterministic `TARGET`, `ASSUMPTION`, or `RISK` keywords, and the Mock provider classifies it as Unsupported. The tested Knowledge example is "What is the annual sales target and what assumptions were used?"
+The prompt "What does gross margin mean?" is not guaranteed to reach Knowledge with the current bounded classifier. It lacks the deterministic `TARGET`, `ASSUMPTION`, or `RISK` keywords, and an Ollama response outside the allowed intent names falls back to `Unsupported`. The tested Knowledge example is "What is the annual sales target and what assumptions were used?"
 
 ## 8. Detailed sequence diagrams
 
@@ -791,28 +787,13 @@ If a document changes, changed chunks receive new IDs. The ingestion code does n
 
 Ingestion catches non-cancellation errors per document and records the source path and message in `RagIngestionResult`. The `--ingest-rag` command prints failures and exits by throwing if any document failed. Compose requires `rag-init` to complete successfully before starting the API.
 
-## 14. LLM providers
-
-Both providers implement `IChatClient`. Configuration selects exactly one singleton implementation at startup.
-
-### Mock provider
-
-`MockChatClient` is the default.
-
-- It runs entirely inside the API process.
-- It uses stable prompt markers and keyword rules.
-- It produces deterministic output suitable for offline tests.
-- It can simulate delay and failure through test configuration.
-- It does not understand broad natural language like a trained model.
-- Its formatted answers intentionally expose the verified payload in a predictable form.
-
-### Ollama provider
+## 14. LLM provider
 
 `OllamaChatClient` wraps `OllamaApiClient` from OllamaSharp.
 
 - Ollama runs on the Windows host, outside Docker.
 - The API container reaches it at `http://host.docker.internal:11434` by default.
-- `AI:Model` selects the model, normally `llama3.2:3b`.
+- `AI:Model` selects the model, normally `llama3.2:3b`; no provider-selection setting exists.
 - The wrapper enforces configured model ID, temperature, context length, output-token limit, and timeout.
 - Caller cancellation remains cancellation.
 - Timeout, unavailable endpoint, malformed response, and empty response become typed provider failures.
@@ -861,13 +842,12 @@ Logs record operational fields as applicable, such as dependency, tool name, pro
 
 Docker Compose reads root `.env` values and maps them to .NET options. Direct `dotnet run` uses `appsettings*.json`, environment variables with `__`, or user secrets.
 
-The local and container defaults are intentionally different. Local `appsettings.json` enables Finance MCP at `http://localhost:5081`, disables Knowledge MCP, and selects Mock. Compose enables both MCP services at Docker DNS addresses and disables the Knowledge local fallback.
+The local and container defaults are intentionally different. Local `appsettings.json` enables Finance MCP at `http://localhost:5081` and disables Knowledge MCP. Compose enables both MCP services at Docker DNS addresses and disables the Knowledge local fallback. Both modes use Ollama.
 
 | Setting | Purpose | Example | Used by | Required behavior |
 |---|---|---|---|---|
-| `AI:Provider` / `AI_PROVIDER` | Select LLM implementation | `Mock` or `Ollama` | API DI registration, health | Must be Mock or Ollama |
-| `AI:Model` / `AI_MODEL` | Provider model name | `DeterministicMock`, `llama3.2:3b` | Chat response, provider | Nonblank |
-| `AI:BaseUrl` / `OLLAMA_BASE_URL` | Ollama endpoint | `http://host.docker.internal:11434` | Ollama HTTP client | Absolute HTTP URL, even when Mock is selected |
+| `AI:Model` / `AI_MODEL` | Ollama model name | `llama3.2:3b` | Chat response, provider | Nonblank |
+| `AI:BaseUrl` / `OLLAMA_BASE_URL` | Ollama endpoint | `http://host.docker.internal:11434` | Ollama HTTP client | Absolute HTTP URL |
 | `AI:TimeoutSeconds` | LLM operation timeout | `120` | Ollama wrapper/client | 1 through 600 |
 | `AI:Temperature` | Ollama sampling variability | `0` | Ollama request | 0 through 2 |
 | `AI:ContextLength` | Ollama context size | `4096` | Ollama request | 1,024 through 32,768 |
@@ -977,16 +957,16 @@ Fully implemented for the bounded MVP. One `CfoOrchestratorAgent` classifies and
 
 Implemented pragmatically around external boundaries:
 
-- `IChatClient` separates agents from Mock/Ollama details.
+- `IChatClient` separates agents from Ollama details and provides a test seam.
 - `IFinanceMcpClient` separates agents from MCP JSON/transport.
 - `IMcpToolAdapter` separates typed clients from the MCP SDK.
 - `IFinancialKnowledgeSearch` separates the knowledge agent from ChromaDB.
 
 This is not a physically separated multi-project Clean Architecture implementation. Application and infrastructure classes live in one API project, but constructor dependencies point through meaningful interfaces at external boundaries.
 
-### Strategy-style LLM provider selection
+### LLM registration
 
-Fully implemented at dependency-injection registration. `AI:Provider` selects one `IChatClient` behavior. There is no separate custom Strategy framework because the common interface is sufficient.
+`Program.cs` registers one `OllamaChatClient` as the runtime `IChatClient`. Unit tests replace that registration with test-project doubles; production has no provider selector or fallback provider.
 
 ### Dependency Injection
 

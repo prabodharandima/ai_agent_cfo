@@ -5,7 +5,7 @@ import App from './App'
 const forecastResponse = {
   conversationId: 'conversation-1', answer: 'Mock forecast explanation based only on verified values.', agentNames: ['CfoOrchestratorAgent', 'ForecastingAgent'], responseType: 'forecast' as const,
   structuredData: { forecasts: [{ year: 2026, conservativeNetRevenue: 90_000, expectedNetRevenue: 100_000, optimisticNetRevenue: 110_000 }] },
-  sources: [{ documentId: 'forecast', documentName: 'Forecast Assumptions', section: 'Planning', sourcePath: 'data/knowledge/forecast.md', period: '2026-2030' }], assumptions: ['Planning estimate only.'], warnings: [], dataPeriod: { label: '2026-2030' }, model: { provider: 'Mock', name: 'DeterministicMock' },
+  sources: [{ documentId: 'forecast', documentName: 'Forecast Assumptions', section: 'Planning', sourcePath: 'data/knowledge/forecast.md', period: '2026-2030' }], assumptions: ['Planning estimate only.'], warnings: [], dataPeriod: { label: '2026-2030' }, model: { provider: 'Ollama', name: 'llama3.2:3b' },
 }
 
 afterEach(() => vi.restoreAllMocks())

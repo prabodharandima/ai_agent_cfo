@@ -2,13 +2,17 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using CfoAgent.Api.AI.Ollama;
+using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Features.Sales;
 using CfoAgent.Api.Health;
 using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Rag.Chroma;
+using CfoAgent.Api.Tests.AI;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -49,7 +53,7 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
         Assert.True(body.TryGetProperty("assumptions", out _));
         Assert.True(body.TryGetProperty("warnings", out _));
         Assert.True(body.TryGetProperty("dataPeriod", out _));
-        Assert.Equal("Mock", body.GetProperty("model").GetProperty("provider").GetString());
+        Assert.Equal("Ollama", body.GetProperty("model").GetProperty("provider").GetString());
         Assert.DoesNotContain("CfoAgent.Api.Models", responseBody, StringComparison.Ordinal);
 
         if (responseType == "knowledge")
@@ -139,10 +143,9 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
         var body = await response.Content.ReadAsStringAsync();
         using var document = JsonDocument.Parse(body);
         Assert.Equal(503, document.RootElement.GetProperty("status").GetInt32());
-        Assert.Equal("CFO assistant is temporarily unavailable.", document.RootElement.GetProperty("title").GetString());
+        Assert.Equal("The selected model provider is temporarily unavailable.", document.RootElement.GetProperty("title").GetString());
         Assert.Equal("https://httpstatuses.com/503", document.RootElement.GetProperty("type").GetString());
         Assert.False(string.IsNullOrWhiteSpace(document.RootElement.GetProperty("traceId").GetString()));
-        Assert.DoesNotContain("Mock chat failure", body, StringComparison.Ordinal);
         Assert.DoesNotContain("stackTrace", body, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -199,23 +202,23 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
 
 public sealed class ChatApiFactory : WebApplicationFactory<Program>
 {
-    private readonly bool _simulateMockFailure;
+    private readonly bool _simulateLlmFailure;
     private readonly bool _simulateFinanceDependencyFailure;
 
     public ChatApiFactory()
-        : this(simulateMockFailure: false, simulateFinanceDependencyFailure: false)
+        : this(simulateLlmFailure: false, simulateFinanceDependencyFailure: false)
     {
     }
 
-    private ChatApiFactory(bool simulateMockFailure, bool simulateFinanceDependencyFailure)
+    private ChatApiFactory(bool simulateLlmFailure, bool simulateFinanceDependencyFailure)
     {
-        _simulateMockFailure = simulateMockFailure;
+        _simulateLlmFailure = simulateLlmFailure;
         _simulateFinanceDependencyFailure = simulateFinanceDependencyFailure;
     }
 
-    public static ChatApiFactory CreateFailing() => new(simulateMockFailure: true, simulateFinanceDependencyFailure: false);
+    public static ChatApiFactory CreateFailing() => new(simulateLlmFailure: true, simulateFinanceDependencyFailure: false);
 
-    public static ChatApiFactory CreateFinanceDependencyFailing() => new(simulateMockFailure: false, simulateFinanceDependencyFailure: true);
+    public static ChatApiFactory CreateFinanceDependencyFailing() => new(simulateLlmFailure: false, simulateFinanceDependencyFailure: true);
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -224,10 +227,11 @@ public sealed class ChatApiFactory : WebApplicationFactory<Program>
         builder.UseSetting("Rag:KnowledgeFilesRoot", Path.Combine(repositoryRoot, "data", "knowledge"));
         builder.UseSetting("Mcp:Finance:Enabled", "true");
         builder.UseSetting("Mcp:KnowledgeFiles:Enabled", "false");
-        builder.UseSetting("AI:SimulateFailure", _simulateMockFailure.ToString());
         builder.ConfigureLogging(logging => logging.ClearProviders());
         builder.ConfigureTestServices(services =>
         {
+            services.RemoveAll<IChatClient>();
+            services.AddSingleton<IChatClient>(CreateTestChatClient());
             services.RemoveAll<FinanceMcpClient>();
             services.RemoveAll<IFinanceMcpClient>();
             services.RemoveAll<IFinanceMcpRemoteClient>();
@@ -238,8 +242,14 @@ public sealed class ChatApiFactory : WebApplicationFactory<Program>
                 .ConfigurePrimaryHttpMessageHandler(static () => new KnowledgeHandler());
             services.AddHttpClient<ChromaClient>()
                 .ConfigurePrimaryHttpMessageHandler(static () => new KnowledgeHandler());
+            services.AddHttpClient(AiOptions.OllamaHttpClientName)
+                .ConfigurePrimaryHttpMessageHandler(static () => new OllamaTagsHandler());
         });
     }
+
+    private IChatClient CreateTestChatClient() => _simulateLlmFailure
+        ? new TestChatClient((_, _, _) => Task.FromException<string>(new OllamaProviderException(OllamaFailureKind.Unavailable)))
+        : new TestChatClient();
 
     private sealed class TestFinanceMcpClient(bool simulateFailure) : IFinanceMcpRemoteClient
     {
@@ -360,6 +370,17 @@ public sealed class ChatApiFactory : WebApplicationFactory<Program>
                 }
                 """));
         }
+
+        private static HttpResponseMessage JsonResponse(string content) => new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(content, Encoding.UTF8, "application/json")
+        };
+    }
+
+    private sealed class OllamaTagsHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(JsonResponse("""{"models":[{"name":"llama3.2:3b"}]}"""));
 
         private static HttpResponseMessage JsonResponse(string content) => new(HttpStatusCode.OK)
         {

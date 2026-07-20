@@ -225,7 +225,6 @@ public sealed class OllamaChatClientTests
         };
         var options = new AiOptions
         {
-            Provider = "Ollama",
             Model = model,
             BaseUrl = "http://localhost:11434",
             TimeoutSeconds = timeoutSeconds,

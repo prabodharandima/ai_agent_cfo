@@ -42,8 +42,8 @@ public sealed class ContainerIntegrationTests
             using var document = JsonDocument.Parse(body);
             var root = document.RootElement;
             Assert.Equal(scenario.ResponseType, root.GetProperty("responseType").GetString());
-            Assert.Equal("Mock", root.GetProperty("model").GetProperty("provider").GetString());
-            Assert.Equal("DeterministicMock", root.GetProperty("model").GetProperty("name").GetString());
+            Assert.Equal("Ollama", root.GetProperty("model").GetProperty("provider").GetString());
+            Assert.Equal("llama3.2:3b", root.GetProperty("model").GetProperty("name").GetString());
             Assert.Contains(
                 root.GetProperty("agentNames").EnumerateArray().Select(agent => agent.GetString()),
                 agent => string.Equals(agent, "CfoOrchestratorAgent", StringComparison.Ordinal));

@@ -19,7 +19,7 @@ describe('ChatResponseContent', () => {
   it.each(responseTypes)('renders %s responses without an error', (responseType) => {
     const response: ChatResponse = {
       conversationId: 'conversation-1', answer: `${responseType} answer`, agentNames: ['CfoOrchestratorAgent'], responseType,
-      structuredData: structuredDataByType[responseType], sources: [], assumptions: [], warnings: [], dataPeriod: { label: 'Demo period' }, model: { provider: 'Mock', name: 'DeterministicMock' },
+      structuredData: structuredDataByType[responseType], sources: [], assumptions: [], warnings: [], dataPeriod: { label: 'Demo period' }, model: { provider: 'Ollama', name: 'llama3.2:3b' },
     }
 
     render(<ChatResponseContent response={response} />)

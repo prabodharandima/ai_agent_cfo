@@ -64,7 +64,7 @@ public static class ChatEndpoints
         var result = await orchestrator.HandleAsync(
             new AgentRequest(request.Message),
             httpContext.RequestAborted);
-        var model = new ChatModel(aiOptions.Value.Provider, aiOptions.Value.Model);
+        var model = new ChatModel("Ollama", aiOptions.Value.Model);
 
         return TypedResults.Ok(ChatResponse.FromAgentResult(result, conversationId, model));
     }

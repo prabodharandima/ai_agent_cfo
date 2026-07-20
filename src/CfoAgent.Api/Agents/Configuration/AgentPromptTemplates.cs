@@ -12,24 +12,24 @@ public static class AgentPromptTemplates
     public static string ForClassification(string message) => $$"""
         Classify the final user request. Return exactly one intent name and no other text:
         SalesSummary, SalesComparison, TopProducts, Forecast, Knowledge, Mixed, or Unsupported.
-        [MOCK:CLASSIFY]
+        USER_REQUEST:
         {{message}}
         """;
 
-    public static string ForSalesSummary(SalesSummary summary) => Create("[MOCK:SALES_SUMMARY]", summary);
+    public static string ForSalesSummary(SalesSummary summary) => Create(summary);
 
-    public static string ForSalesComparison(WeeklySalesComparison comparison) => Create("[MOCK:SALES_COMPARISON]", comparison);
+    public static string ForSalesComparison(WeeklySalesComparison comparison) => Create(comparison);
 
-    public static string ForTopProducts(TopProductsResult topProducts) => Create("[MOCK:TOP_PRODUCTS]", topProducts);
+    public static string ForTopProducts(TopProductsResult topProducts) => Create(topProducts);
 
-    public static string ForForecast(SalesForecastResult forecast) => Create("[MOCK:FORECAST]", forecast);
+    public static string ForForecast(SalesForecastResult forecast) => Create(forecast);
 
     public static string ForKnowledge(string retrievedContext) => $$"""
         Answer concisely using only RETRIEVED_CONTEXT. Do not add facts, values, or sources. If the context is insufficient, say so. Return prose only; do not return tool calls.
-        [MOCK:KNOWLEDGE]
+        RETRIEVED_CONTEXT:
         {{retrievedContext}}
         """;
 
-    private static string Create(string marker, object verifiedPayload) =>
-        $"{VerifiedDataInstructions}\n{marker}\n{JsonSerializer.Serialize(verifiedPayload)}";
+    private static string Create(object verifiedPayload) =>
+        $"{VerifiedDataInstructions}\nVERIFIED_DATA:\n{JsonSerializer.Serialize(verifiedPayload)}";
 }
