@@ -37,6 +37,20 @@ public sealed class FinanceMcpClientTests
             call => AssertCall(call, "get_budget_target", ("year", 2026), ("month", null)));
     }
 
+    [Fact]
+    public async Task CurrentWeekSummaryUsesTheInjectedCurrentDateWhenTheWeekStartsToday()
+    {
+        var adapter = new RecordingToolAdapter();
+        var client = new FinanceMcpClient(
+            adapter,
+            new FixedTimeProvider(new DateOnly(2026, 7, 20)),
+            NullLogger<FinanceMcpClient>.Instance);
+
+        await client.GetCurrentWeekSummaryAsync(CancellationToken.None);
+
+        AssertCall(adapter.Calls.Single(), "get_sales_summary", ("startDate", "2026-07-20"), ("endDate", "2026-07-20"));
+    }
+
     private static void AssertCall(
         RecordedCall call,
         string expectedToolName,

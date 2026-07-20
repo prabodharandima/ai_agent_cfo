@@ -40,8 +40,13 @@ public sealed class PostgreSqlMigrationTests(FinancePostgreSqlFixture postgres)
 
         await RunFinanceCommandAsync("--migrate");
         await RunFinanceCommandAsync("--seed");
+        var afterFirstSeed = await postgres.GetCountsAsync();
+        await RunFinanceCommandAsync("--seed");
 
-        Assert.Equal(before, await postgres.GetCountsAsync());
+        Assert.Equal(before.Products, afterFirstSeed.Products);
+        Assert.True(afterFirstSeed.Sales >= before.Sales);
+        Assert.Equal(before.BudgetTargets, afterFirstSeed.BudgetTargets);
+        Assert.Equal(afterFirstSeed, await postgres.GetCountsAsync());
     }
 
     private async Task RunFinanceCommandAsync(string command)

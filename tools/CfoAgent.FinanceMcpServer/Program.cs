@@ -26,6 +26,7 @@ public sealed class Program
         builder.Logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
         var connectionString = FinanceDatabaseConfiguration.GetRequiredConnectionString(builder.Configuration);
         builder.Services.Configure<FinanceOptions>(builder.Configuration.GetSection(FinanceOptions.SectionName));
+        builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddDbContext<FinanceDbContext>(options => options.UseNpgsql(connectionString));
         builder.Services.AddScoped<DevelopmentFinanceSeeder>();
         builder.Services.AddHealthChecks()

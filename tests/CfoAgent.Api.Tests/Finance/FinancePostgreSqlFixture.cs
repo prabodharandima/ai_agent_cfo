@@ -33,7 +33,10 @@ public sealed class FinancePostgreSqlFixture : IAsyncLifetime
 
         await using var context = CreateDbContext();
         await context.Database.MigrateAsync();
-        await new DevelopmentFinanceSeeder(context, Options.Create(new FinanceOptions { DemoDate = DemoDate }))
+        await new DevelopmentFinanceSeeder(
+                context,
+                Options.Create(new FinanceOptions { DemoDate = DemoDate }),
+                new FixedTimeProvider(DemoDate))
             .SeedAsync(CancellationToken.None);
     }
 
