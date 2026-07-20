@@ -12,6 +12,21 @@ public static class AgentPromptTemplates
     public static string ForClassification(string message) => $$"""
         Classify the final user request. Return exactly one intent name and no other text:
         SalesSummary, SalesComparison, TopProducts, Forecast, Knowledge, Mixed, or Unsupported.
+
+        Route requests using these rules:
+        - SalesSummary: current or weekly sales summaries.
+        - SalesComparison: comparisons between sales periods.
+        - TopProducts: product rankings or top products.
+        - Forecast: sales forecasts without a request for document-based assumptions or risks.
+        - Knowledge: questions about documented financial targets, assumptions, risks, market risks, or product strategy.
+        - Mixed: a forecast request that also asks about assumptions, targets, or risks.
+        - Unsupported: only when none of the above applies.
+
+        Examples:
+        - "What is the annual sales target and what assumptions were used?" => Knowledge
+        - "What financial risks are documented for the business?" => Knowledge
+        - "Give me the forecast with assumptions and risks." => Mixed
+
         USER_REQUEST:
         {{message}}
         """;

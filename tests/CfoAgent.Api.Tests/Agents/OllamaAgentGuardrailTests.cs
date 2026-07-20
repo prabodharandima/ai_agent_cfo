@@ -2,6 +2,7 @@ using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using CfoAgent.Api.AI;
 using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Agents;
 using CfoAgent.Api.Agents.Configuration;
@@ -131,7 +132,7 @@ public sealed class OllamaAgentGuardrailTests
     {
         using var fakeClient = new OllamaStyleFakeChatClient
         {
-            FormattingFailure = new OllamaProviderException(OllamaFailureKind.Unavailable)
+            FormattingFailure = new AiProviderException("Ollama", AiProviderFailureKind.Unavailable)
         };
         var orchestrator = new CfoOrchestratorAgent(
             new SalesAnalysisAgent(fakeClient, new FinanceFake()),
@@ -140,10 +141,10 @@ public sealed class OllamaAgentGuardrailTests
             new AgentResultComposer(),
             fakeClient);
 
-        var exception = await Assert.ThrowsAsync<OllamaProviderException>(() =>
+        var exception = await Assert.ThrowsAsync<AiProviderException>(() =>
             orchestrator.HandleAsync(new AgentRequest("Give me the sales summary of this week.")));
 
-        Assert.Equal(OllamaFailureKind.Unavailable, exception.FailureKind);
+        Assert.Equal(AiProviderFailureKind.Unavailable, exception.FailureKind);
     }
 
     [Fact]

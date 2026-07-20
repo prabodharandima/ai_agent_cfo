@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using CfoAgent.Api.AI;
 using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Configuration;
 using Microsoft.Extensions.AI;
@@ -123,11 +124,11 @@ public sealed class OllamaChatClientTests
         });
         using var fixture = CreateClient(handler, timeoutSeconds: 1);
 
-        var exception = await Assert.ThrowsAsync<OllamaProviderException>(() => fixture.Client.GetResponseAsync(
+        var exception = await Assert.ThrowsAsync<AiProviderException>(() => fixture.Client.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "timeout")]));
 
-        Assert.Equal(OllamaFailureKind.Timeout, exception.FailureKind);
-        Assert.Equal("The Ollama provider request timed out.", exception.Message);
+        Assert.Equal(AiProviderFailureKind.Timeout, exception.FailureKind);
+        Assert.Equal("The model provider request timed out.", exception.Message);
     }
 
     [Fact]
@@ -139,10 +140,10 @@ public sealed class OllamaChatClientTests
         });
         using var fixture = CreateClient(handler);
 
-        var exception = await Assert.ThrowsAsync<OllamaProviderException>(() => fixture.Client.GetResponseAsync(
+        var exception = await Assert.ThrowsAsync<AiProviderException>(() => fixture.Client.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "private prompt")]));
 
-        Assert.Equal(OllamaFailureKind.Unavailable, exception.FailureKind);
+        Assert.Equal(AiProviderFailureKind.Unavailable, exception.FailureKind);
         Assert.DoesNotContain("sensitive", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("private prompt", exception.Message, StringComparison.Ordinal);
     }
@@ -153,11 +154,11 @@ public sealed class OllamaChatClientTests
         var handler = new RecordingHandler((_, _) => throw new HttpRequestException("sensitive endpoint details"));
         using var fixture = CreateClient(handler);
 
-        var exception = await Assert.ThrowsAsync<OllamaProviderException>(() => fixture.Client.GetResponseAsync(
+        var exception = await Assert.ThrowsAsync<AiProviderException>(() => fixture.Client.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "private prompt")]));
 
-        Assert.Equal(OllamaFailureKind.Unavailable, exception.FailureKind);
-        Assert.Equal("The Ollama provider is unavailable.", exception.Message);
+        Assert.Equal(AiProviderFailureKind.Unavailable, exception.FailureKind);
+        Assert.Equal("The model provider is unavailable.", exception.Message);
     }
 
     [Fact]
@@ -166,11 +167,11 @@ public sealed class OllamaChatClientTests
         var handler = new RecordingHandler(_ => JsonResponse("not valid json"));
         using var fixture = CreateClient(handler);
 
-        var exception = await Assert.ThrowsAsync<OllamaProviderException>(() => fixture.Client.GetResponseAsync(
+        var exception = await Assert.ThrowsAsync<AiProviderException>(() => fixture.Client.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "private prompt")]));
 
-        Assert.Equal(OllamaFailureKind.InvalidResponse, exception.FailureKind);
-        Assert.Equal("The Ollama provider returned an invalid response.", exception.Message);
+        Assert.Equal(AiProviderFailureKind.InvalidResponse, exception.FailureKind);
+        Assert.Equal("The model provider returned an invalid response.", exception.Message);
     }
 
     [Fact]
@@ -179,10 +180,10 @@ public sealed class OllamaChatClientTests
         var handler = new RecordingHandler(_ => JsonResponse(CreateChatResponse("   ")));
         using var fixture = CreateClient(handler);
 
-        var exception = await Assert.ThrowsAsync<OllamaProviderException>(() => fixture.Client.GetResponseAsync(
+        var exception = await Assert.ThrowsAsync<AiProviderException>(() => fixture.Client.GetResponseAsync(
             [new ChatMessage(ChatRole.User, "empty")]));
 
-        Assert.Equal(OllamaFailureKind.InvalidResponse, exception.FailureKind);
+        Assert.Equal(AiProviderFailureKind.InvalidResponse, exception.FailureKind);
     }
 
     [Fact]
@@ -197,7 +198,7 @@ public sealed class OllamaChatClientTests
         });
         using var fixture = CreateClient(handler, logger: logger);
 
-        await Assert.ThrowsAsync<OllamaProviderException>(() => fixture.Client.GetResponseAsync(
+        await Assert.ThrowsAsync<AiProviderException>(() => fixture.Client.GetResponseAsync(
             [new ChatMessage(ChatRole.User, prompt)]));
 
         var entry = Assert.Single(logger.Entries);
@@ -223,7 +224,7 @@ public sealed class OllamaChatClientTests
             BaseAddress = new Uri("http://localhost:11434"),
             Timeout = TimeSpan.FromSeconds(timeoutSeconds + 1)
         };
-        var options = new AiOptions
+        var options = new OllamaOptions
         {
             Model = model,
             BaseUrl = "http://localhost:11434",
@@ -233,7 +234,11 @@ public sealed class OllamaChatClientTests
             MaxOutputTokens = 256
         };
         var transport = (IChatClient)new OllamaApiClient(httpClient, options.Model);
-        return new ClientFixture(httpClient, new OllamaChatClient(transport, options, logger));
+        return new ClientFixture(httpClient, new OllamaChatClient(
+            transport,
+            options,
+            new AiProviderDescriptor("Ollama", model),
+            logger));
     }
 
     private static string CreateChatResponse(string content, string model = "configured-model") => JsonSerializer.Serialize(new

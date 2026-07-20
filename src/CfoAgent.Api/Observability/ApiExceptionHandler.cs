@@ -1,25 +1,23 @@
-using CfoAgent.Api.AI.Ollama;
-using CfoAgent.Api.Configuration;
+using CfoAgent.Api.AI;
 using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Rag.Retrieval;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Observability;
 
 public sealed class ApiExceptionHandler(
     IProblemDetailsService problemDetailsService,
     ILogger<ApiExceptionHandler> logger,
-    IOptions<AiOptions> aiOptions) : IExceptionHandler
+    AiProviderDescriptor aiProvider) : IExceptionHandler
 {
     public async ValueTask<bool> TryHandleAsync(HttpContext httpContext, Exception exception, CancellationToken cancellationToken)
     {
         var (statusCode, title) = exception switch
         {
-            OllamaProviderException { FailureKind: OllamaFailureKind.Timeout } => (StatusCodes.Status504GatewayTimeout, "The selected model provider timed out."),
-            OllamaProviderException { FailureKind: OllamaFailureKind.Unavailable } => (StatusCodes.Status503ServiceUnavailable, "The selected model provider is temporarily unavailable."),
-            OllamaProviderException => (StatusCodes.Status503ServiceUnavailable, "The selected model provider returned an unusable response."),
+            AiProviderException { FailureKind: AiProviderFailureKind.Timeout } => (StatusCodes.Status504GatewayTimeout, "The selected model provider timed out."),
+            AiProviderException { FailureKind: AiProviderFailureKind.Unavailable } => (StatusCodes.Status503ServiceUnavailable, "The selected model provider is temporarily unavailable."),
+            AiProviderException => (StatusCodes.Status503ServiceUnavailable, "The selected model provider returned an unusable response."),
             VectorSearchDependencyException => (StatusCodes.Status503ServiceUnavailable, "A required dependency is temporarily unavailable."),
             McpDependencyException => (StatusCodes.Status503ServiceUnavailable, "A required dependency is temporarily unavailable."),
             TimeoutException => (StatusCodes.Status504GatewayTimeout, "The request timed out."),
@@ -28,12 +26,12 @@ public sealed class ApiExceptionHandler(
             _ => (StatusCodes.Status500InternalServerError, "An unexpected server error occurred.")
         };
 
-        if (exception is OllamaProviderException providerException)
+        if (exception is AiProviderException providerException)
         {
             logger.LogWarning(
-                "Ollama operation failed. Provider: {Provider}; Model: {Model}; Operation: {Operation}; Outcome: {Outcome}; FailureCategory: {FailureCategory}; StatusCode: {StatusCode}",
-                "Ollama",
-                aiOptions.Value.Model,
+                "AI provider operation failed. Provider: {Provider}; Model: {Model}; Operation: {Operation}; Outcome: {Outcome}; FailureCategory: {FailureCategory}; StatusCode: {StatusCode}",
+                providerException.ProviderName,
+                aiProvider.ModelName,
                 "chat",
                 "Failure",
                 providerException.FailureKind,

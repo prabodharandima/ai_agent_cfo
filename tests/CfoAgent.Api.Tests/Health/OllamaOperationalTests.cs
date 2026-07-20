@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using CfoAgent.Api.AI;
 using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Tests.Api;
@@ -46,7 +47,7 @@ public sealed class OllamaOperationalTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(1, handler.CallCount);
-        Assert.Equal("Healthy", await GetDependencyStatusAsync(response, "ollama"));
+        Assert.Equal("Healthy", await GetDependencyStatusAsync(response, "ai-provider"));
     }
 
     [Fact]
@@ -59,7 +60,7 @@ public sealed class OllamaOperationalTests
         using var response = await client.GetAsync("/health/ready");
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-        Assert.Equal("Unhealthy", await GetDependencyStatusAsync(response, "ollama"));
+        Assert.Equal("Unhealthy", await GetDependencyStatusAsync(response, "ai-provider"));
         var body = await response.Content.ReadAsStringAsync();
         Assert.Contains("Ollama is unavailable.", body, StringComparison.Ordinal);
         Assert.DoesNotContain("private-provider", body, StringComparison.Ordinal);
@@ -91,7 +92,7 @@ public sealed class OllamaOperationalTests
         await using var factory = CreateFactory(new CountingHandler((_, _) => Task.FromResult(JsonResponse("""{"models":[{"name":"llama3.2:3b"}]}"""))), services =>
         {
             services.RemoveAll<IChatClient>();
-            services.AddSingleton<IChatClient>(new ThrowingChatClient(new OllamaProviderException(OllamaFailureKind.Unavailable)));
+            services.AddSingleton<IChatClient>(new ThrowingChatClient(new AiProviderException("Ollama", AiProviderFailureKind.Unavailable)));
         });
         using var client = factory.CreateClient();
 
@@ -141,14 +142,15 @@ public sealed class OllamaOperationalTests
         Action<IServiceCollection>? configureServices = null,
         string? timeoutSeconds = null) => new ChatApiFactory().WithWebHostBuilder(builder =>
     {
-        builder.UseSetting("AI:Model", "llama3.2:3b");
+        builder.UseSetting("AI:Provider", "Ollama");
+        builder.UseSetting("AI:Ollama:Model", "llama3.2:3b");
         if (timeoutSeconds is not null)
         {
-            builder.UseSetting("AI:TimeoutSeconds", timeoutSeconds);
+            builder.UseSetting("AI:Ollama:TimeoutSeconds", timeoutSeconds);
         }
         builder.ConfigureTestServices(services =>
         {
-            services.AddHttpClient(AiOptions.OllamaHttpClientName)
+            services.AddHttpClient(OllamaOptions.HttpClientName)
                 .ConfigurePrimaryHttpMessageHandler(() => ollamaHandler);
             configureServices?.Invoke(services);
         });
@@ -201,7 +203,7 @@ public sealed class OllamaOperationalTests
         }
     }
 
-    private sealed class ThrowingChatClient(OllamaProviderException exception) : IChatClient
+    private sealed class ThrowingChatClient(AiProviderException exception) : IChatClient
     {
         public ChatClientMetadata Metadata { get; } = new("Ollama", new Uri("http://localhost:11434"), "llama3.2:3b");
 

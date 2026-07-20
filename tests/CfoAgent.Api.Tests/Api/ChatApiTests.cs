@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using CfoAgent.Api.AI;
 using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Features.Sales;
@@ -87,6 +88,28 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
         Assert.Contains("ForecastingAgent", body.GetProperty("agentNames").EnumerateArray().Select(value => value.GetString()));
         Assert.Contains("FinancialKnowledgeAgent", body.GetProperty("agentNames").EnumerateArray().Select(value => value.GetString()));
         Assert.NotEmpty(body.GetProperty("answer").GetString()!);
+    }
+
+    [Fact]
+    public async Task PostChat_UsesProviderNeutralRuntimeMetadata()
+    {
+        await using var factory = new ChatApiFactory().WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<AiProviderDescriptor>();
+                services.AddSingleton(new AiProviderDescriptor("Test Provider", "test-model"));
+            });
+        });
+        using var client = factory.CreateClient();
+
+        using var response = await client.PostAsJsonAsync("/api/chat", new { message = "Give me the sales summary of this week." });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var model = document.RootElement.GetProperty("model");
+        Assert.Equal("Test Provider", model.GetProperty("provider").GetString());
+        Assert.Equal("test-model", model.GetProperty("name").GetString());
     }
 
     [Fact]
@@ -242,13 +265,13 @@ public sealed class ChatApiFactory : WebApplicationFactory<Program>
                 .ConfigurePrimaryHttpMessageHandler(static () => new KnowledgeHandler());
             services.AddHttpClient<ChromaClient>()
                 .ConfigurePrimaryHttpMessageHandler(static () => new KnowledgeHandler());
-            services.AddHttpClient(AiOptions.OllamaHttpClientName)
+            services.AddHttpClient(OllamaOptions.HttpClientName)
                 .ConfigurePrimaryHttpMessageHandler(static () => new OllamaTagsHandler());
         });
     }
 
     private IChatClient CreateTestChatClient() => _simulateLlmFailure
-        ? new TestChatClient((_, _, _) => Task.FromException<string>(new OllamaProviderException(OllamaFailureKind.Unavailable)))
+        ? new TestChatClient((_, _, _) => Task.FromException<string>(new AiProviderException("Ollama", AiProviderFailureKind.Unavailable)))
         : new TestChatClient();
 
     private sealed class TestFinanceMcpClient(bool simulateFailure) : IFinanceMcpRemoteClient

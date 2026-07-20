@@ -17,7 +17,7 @@ namespace CfoAgent.Api.Tests.AI;
 public sealed class AiProviderRegistrationTests
 {
     [Fact]
-    public async Task DefaultConfiguration_RegistersOnlyTheOllamaChatClientWithoutAProviderSelection()
+    public async Task DefaultConfiguration_SelectsAndRegistersTheOllamaChatClient()
     {
         await using var factory = CreateFactory(static _ => { });
 
@@ -28,16 +28,17 @@ public sealed class AiProviderRegistrationTests
     }
 
     [Fact]
-    public async Task DefaultConfiguration_BindsTheOllamaSettingsWithoutAProviderSelection()
+    public async Task DefaultConfiguration_BindsTheSelectedOllamaSettings()
     {
         await using var factory = CreateFactory(static _ => { });
 
         var configuration = factory.Services.GetRequiredService<IConfiguration>();
         var options = factory.Services.GetRequiredService<IOptions<AiOptions>>().Value;
 
-        Assert.Null(configuration["AI:Provider"]);
-        Assert.Equal("llama3.2:3b", options.Model);
-        Assert.Equal("http://localhost:11434", options.BaseUrl);
+        Assert.Equal("Ollama", configuration["AI:Provider"]);
+        Assert.Equal("Ollama", options.Provider);
+        Assert.Equal("llama3.2:3b", options.Ollama.Model);
+        Assert.Equal("http://localhost:11434", options.Ollama.BaseUrl);
     }
 
     [Fact]
@@ -58,7 +59,7 @@ public sealed class AiProviderRegistrationTests
         {
             builder.ConfigureTestServices(services =>
             {
-                services.AddHttpClient(AiOptions.OllamaHttpClientName)
+                services.AddHttpClient(OllamaOptions.HttpClientName)
                     .ConfigurePrimaryHttpMessageHandler(() => requestCounter);
             });
         });
@@ -80,12 +81,13 @@ public sealed class AiProviderRegistrationTests
     }
 
     [Theory]
-    [InlineData("AI:BaseUrl", "ftp://localhost:11434", "AI:BaseUrl")]
-    [InlineData("AI:Model", "", "AI:Model")]
-    [InlineData("AI:TimeoutSeconds", "0", "AI:TimeoutSeconds")]
-    [InlineData("AI:ContextLength", "512", "AI:ContextLength")]
-    [InlineData("AI:MaxOutputTokens", "0", "AI:MaxOutputTokens")]
-    [InlineData("AI:Temperature", "2.1", "AI:Temperature")]
+    [InlineData("AI:Provider", "Unsupported", "AI:Provider")]
+    [InlineData("AI:Ollama:BaseUrl", "ftp://localhost:11434", "AI:Ollama:BaseUrl")]
+    [InlineData("AI:Ollama:Model", "", "AI:Ollama:Model")]
+    [InlineData("AI:Ollama:TimeoutSeconds", "0", "AI:Ollama:TimeoutSeconds")]
+    [InlineData("AI:Ollama:ContextLength", "512", "AI:Ollama:ContextLength")]
+    [InlineData("AI:Ollama:MaxOutputTokens", "0", "AI:Ollama:MaxOutputTokens")]
+    [InlineData("AI:Ollama:Temperature", "2.1", "AI:Ollama:Temperature")]
     public async Task InvalidAiConfiguration_FailsPredictably(string key, string value, string expectedMessage)
     {
         await using var factory = CreateFactory(builder => builder.UseSetting(key, value));

@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using CfoAgent.Api.AI;
 using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Agents;
 using CfoAgent.Api.Agents.Configuration;
@@ -35,15 +36,15 @@ public sealed class OllamaLiveIntegrationTests
     public async Task EndpointAndConfiguredModel_AreAvailable()
     {
         var settings = LiveOllamaTestSettings.Load();
-        using var client = CreateHttpClient(settings.Ai);
+        using var client = CreateHttpClient(settings.Ai.Ollama);
 
         using var response = await client.GetAsync("api/tags");
         response.EnsureSuccessStatusCode();
         using var document = JsonDocument.Parse(await response.Content.ReadAsStreamAsync());
 
-        Assert.Equal("llama3.2:3b", settings.Ai.Model, ignoreCase: true);
+        Assert.Equal("llama3.2:3b", settings.Ai.Ollama.Model, ignoreCase: true);
         Assert.Contains(document.RootElement.GetProperty("models").EnumerateArray(), model =>
-            string.Equals(model.GetProperty("name").GetString(), settings.Ai.Model, StringComparison.Ordinal));
+            string.Equals(model.GetProperty("name").GetString(), settings.Ai.Ollama.Model, StringComparison.Ordinal));
     }
 
     [OllamaLiveFact]
@@ -51,8 +52,8 @@ public sealed class OllamaLiveIntegrationTests
     public async Task ChatClient_CompletesAShortBoundedPromptWithConfiguredMetadata()
     {
         var settings = LiveOllamaTestSettings.Load();
-        using var httpClient = CreateHttpClient(settings.Ai);
-        using var chatClient = CreateChatClient(httpClient, settings.Ai);
+        using var httpClient = CreateHttpClient(settings.Ai.Ollama);
+        using var chatClient = CreateChatClient(httpClient, settings.Ai.Ollama);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
 
         var response = await chatClient.GetResponseAsync(
@@ -61,7 +62,7 @@ public sealed class OllamaLiveIntegrationTests
 
         Assert.False(string.IsNullOrWhiteSpace(response.Text));
         Assert.Equal("Ollama", chatClient.Metadata.ProviderName);
-        Assert.Equal(settings.Ai.Model, chatClient.Metadata.DefaultModelId);
+        Assert.Equal(settings.Ai.Ollama.Model, chatClient.Metadata.DefaultModelId);
     }
 
     [OllamaLiveFact]
@@ -69,7 +70,7 @@ public sealed class OllamaLiveIntegrationTests
     public async Task ChatApi_SalesSummaryPreservesDeterministicStructuredData()
     {
         var settings = LiveOllamaTestSettings.Load();
-        await using var factory = CreateChatApiFactory(settings.Ai);
+        await using var factory = CreateChatApiFactory(settings.Ai.Ollama);
         using var client = factory.CreateClient();
         client.Timeout = TimeSpan.FromSeconds(90);
 
@@ -83,7 +84,7 @@ public sealed class OllamaLiveIntegrationTests
         var body = document.RootElement;
         Assert.Equal("sales_summary", body.GetProperty("responseType").GetString());
         Assert.Equal("Ollama", body.GetProperty("model").GetProperty("provider").GetString());
-        Assert.Equal(settings.Ai.Model, body.GetProperty("model").GetProperty("name").GetString());
+        Assert.Equal(settings.Ai.Ollama.Model, body.GetProperty("model").GetProperty("name").GetString());
         Assert.True(body.GetProperty("structuredData").TryGetProperty("NetRevenue", out _));
     }
 
@@ -92,8 +93,8 @@ public sealed class OllamaLiveIntegrationTests
     public async Task FinancialKnowledgeAgent_RetainsIndexedSourcesWhenLocalChromaDataIsAvailable()
     {
         var settings = LiveOllamaTestSettings.Load();
-        using var ollamaHttpClient = CreateHttpClient(settings.Ai);
-        using var chatClient = CreateChatClient(ollamaHttpClient, settings.Ai);
+        using var ollamaHttpClient = CreateHttpClient(settings.Ai.Ollama);
+        using var chatClient = CreateChatClient(ollamaHttpClient, settings.Ai.Ollama);
         using var chromaHttpClient = CreateHttpClient(settings.Chroma.BaseUrl, settings.Chroma.TimeoutSeconds);
         using var services = new ServiceCollection().BuildServiceProvider();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
@@ -114,7 +115,7 @@ public sealed class OllamaLiveIntegrationTests
         Assert.NotEmpty(result.Sources);
     }
 
-    private static HttpClient CreateHttpClient(AiOptions options) =>
+    private static HttpClient CreateHttpClient(OllamaOptions options) =>
         CreateHttpClient(options.BaseUrl, options.TimeoutSeconds);
 
     private static HttpClient CreateHttpClient(string baseUrl, int timeoutSeconds) => new()
@@ -123,18 +124,19 @@ public sealed class OllamaLiveIntegrationTests
         Timeout = TimeSpan.FromSeconds(timeoutSeconds)
     };
 
-    private static OllamaChatClient CreateChatClient(HttpClient httpClient, AiOptions options) =>
-        new((IChatClient)new OllamaApiClient(httpClient, options.Model), options);
+    private static OllamaChatClient CreateChatClient(HttpClient httpClient, OllamaOptions options) =>
+        new((IChatClient)new OllamaApiClient(httpClient, options.Model), options, new AiProviderDescriptor("Ollama", options.Model));
 
-    private static WebApplicationFactory<Program> CreateChatApiFactory(AiOptions options) =>
+    private static WebApplicationFactory<Program> CreateChatApiFactory(OllamaOptions options) =>
         new ChatApiFactory().WithWebHostBuilder(builder =>
         {
-            builder.UseSetting("AI:Model", options.Model);
-            builder.UseSetting("AI:BaseUrl", options.BaseUrl);
-            builder.UseSetting("AI:TimeoutSeconds", options.TimeoutSeconds.ToString());
-            builder.UseSetting("AI:Temperature", options.Temperature.ToString(System.Globalization.CultureInfo.InvariantCulture));
-            builder.UseSetting("AI:ContextLength", options.ContextLength.ToString());
-            builder.UseSetting("AI:MaxOutputTokens", options.MaxOutputTokens.ToString());
+            builder.UseSetting("AI:Provider", "Ollama");
+            builder.UseSetting("AI:Ollama:Model", options.Model);
+            builder.UseSetting("AI:Ollama:BaseUrl", options.BaseUrl);
+            builder.UseSetting("AI:Ollama:TimeoutSeconds", options.TimeoutSeconds.ToString());
+            builder.UseSetting("AI:Ollama:Temperature", options.Temperature.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            builder.UseSetting("AI:Ollama:ContextLength", options.ContextLength.ToString());
+            builder.UseSetting("AI:Ollama:MaxOutputTokens", options.MaxOutputTokens.ToString());
         });
 }
 
@@ -177,19 +179,19 @@ internal static class OllamaLiveAvailability
         }
         catch (Exception)
         {
-            return new LiveOllamaAvailability("Live Ollama test configuration is invalid. Set AI__BaseUrl and AI__Model before opting in.", null);
+            return new LiveOllamaAvailability("Live Ollama test configuration is invalid. Set AI__Ollama__BaseUrl and AI__Ollama__Model before opting in.", null);
         }
 
-        if (!string.Equals(settings.Ai.Model, "llama3.2:3b", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(settings.Ai.Ollama.Model, "llama3.2:3b", StringComparison.OrdinalIgnoreCase))
         {
-            return new LiveOllamaAvailability("Live Ollama tests require AI__Model=llama3.2:3b.", settings);
+            return new LiveOllamaAvailability("Live Ollama tests require AI__Ollama__Model=llama3.2:3b.", settings);
         }
 
         try
         {
             using var client = new HttpClient
             {
-                BaseAddress = new Uri(settings.Ai.BaseUrl),
+                BaseAddress = new Uri(settings.Ai.Ollama.BaseUrl),
                 Timeout = TimeSpan.FromSeconds(5)
             };
             using var response = client.GetAsync("api/tags").GetAwaiter().GetResult();
@@ -203,7 +205,7 @@ internal static class OllamaLiveAvailability
                 && models.ValueKind == JsonValueKind.Array
                 && models.EnumerateArray().Any(model =>
                     model.TryGetProperty("name", out var name)
-                    && string.Equals(name.GetString(), settings.Ai.Model, StringComparison.Ordinal));
+                    && string.Equals(name.GetString(), settings.Ai.Ollama.Model, StringComparison.Ordinal));
             return modelAvailable
                 ? new LiveOllamaAvailability(null, settings)
                 : new LiveOllamaAvailability("The configured llama3.2:3b model is unavailable. Install it manually with 'ollama pull llama3.2:3b' and retry.", settings);
