@@ -31,6 +31,8 @@ public sealed class ChromaFinancialKnowledgeSearch(
 
         var embeddings = await embeddingGenerator.GenerateAsync([query.Query], cancellationToken: cancellationToken);
         var matches = await chromaClient.QueryAsync(collection, embeddings.Single().Vector.ToArray(), query.TopK, cancellationToken);
+        var seenChunkIds = new HashSet<string>(StringComparer.Ordinal);
+        var seenNormalizedContent = new HashSet<string>(StringComparer.Ordinal);
         var sources = matches
             .Select(MapSource)
             .Where(source => source is not null)
@@ -41,6 +43,8 @@ public sealed class ChromaFinancialKnowledgeSearch(
             .ThenBy(source => source.SourcePath, StringComparer.Ordinal)
             .ThenBy(source => source.Section, StringComparer.Ordinal)
             .ThenBy(source => source.ChunkId, StringComparer.Ordinal)
+            .Where(source => seenChunkIds.Add(source.ChunkId))
+            .Where(source => seenNormalizedContent.Add(NormalizeContent(source.Content)))
             .GroupBy(source => (source.DocumentId, source.Section, source.SourcePath))
             .Select(group => group.First())
             .ToArray();
@@ -73,6 +77,9 @@ public sealed class ChromaFinancialKnowledgeSearch(
 
     private static bool TryGet(IReadOnlyDictionary<string, string> metadata, string key, out string value) =>
         metadata.TryGetValue(key, out value!) && !string.IsNullOrWhiteSpace(value);
+
+    private static string NormalizeContent(string content) =>
+        string.Join(' ', content.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     private static FinancialKnowledgeRetrievalResult Insufficient(string warning) =>
         new(Array.Empty<FinancialKnowledgeSource>(), [warning]);

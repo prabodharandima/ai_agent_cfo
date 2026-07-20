@@ -756,7 +756,7 @@ Each document must provide:
 
 ### Chunking
 
-`RagDocumentIngestionService.BuildChunks` treats Markdown headings as section boundaries. It combines paragraphs up to `Rag:MaxChunkCharacters`, default 1,200. Oversized paragraphs are split at a sentence or space boundary. A token longer than the configured size causes that document to fail ingestion.
+`RagDocumentIngestionService.BuildChunks` treats Markdown headings as section boundaries. Within each section it uses deterministic character-based sliding windows up to `Rag:MaxChunkCharacters`, default 1,200. The next window starts after `chunk size - overlap size` characters. `Rag:ChunkOverlapPercentage` defaults to 15, and its overlap size is rounded away from zero. This keeps a small amount of boundary context in consecutive chunks without skipping source text. Re-ingestion deletes prior ChromaDB records for the same `source_path` before writing the current chunk set, so a chunk-size or overlap change does not leave old chunk IDs alongside the new ones.
 
 ### Collection creation
 
@@ -869,6 +869,7 @@ The local and container defaults are intentionally different. Local `appsettings
 | `Chroma:TimeoutSeconds` | Chroma HTTP timeout | `10` | Chroma clients | Positive |
 | `Rag:KnowledgeFilesRoot` | Markdown source directory | `/knowledge` in Compose | RAG ingestion | Nonblank |
 | `Rag:MaxChunkCharacters` | Maximum chunk target | `1200` | Ingestion | At least 256 |
+| `Rag:ChunkOverlapPercentage` / `RAG_CHUNK_OVERLAP_PERCENTAGE` | Percentage of each chunk repeated at the start of the next chunk | `15` | RAG ingestion | At least 0 and below 100; calculated overlap must be smaller than the chunk size |
 | `Rag:MaxKnowledgeContextCharacters` | Maximum LLM context built from retrieval | `4000` | Knowledge agent | At least 256 |
 | `Rag:MaximumRetrievalDistance` | Largest accepted Chroma distance | `1.25` | Vector-search adapter | Nonnegative |
 
@@ -1000,7 +1001,7 @@ These limitations are visible in the current code:
 - Knowledge File MCP is not part of the current knowledge-answer path; ChromaDB is.
 - The token-hash embedding is deterministic and test-friendly but is not a trained semantic model. It depends heavily on shared tokens and can suffer hash collisions.
 - The exact Chroma distance metric is not configured by repository code.
-- Re-ingestion upserts current chunk IDs but does not delete stale IDs created by older document content.
+- Re-ingestion replaces records for Markdown documents that are currently present, keyed by their front-matter `source_path`. Removing a source Markdown file does not automatically purge its existing ChromaDB records.
 - Internal MCP and PostgreSQL services are unauthenticated. Docker network isolation is the current protection.
 - Ollama is a local host dependency and must have the configured model installed.
 - Knowledge local fallback is Development-only and explicitly disabled in containers.

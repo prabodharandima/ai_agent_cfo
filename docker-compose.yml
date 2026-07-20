@@ -31,6 +31,7 @@ services:
         condition: service_healthy
     networks:
       - backend
+      - edge
     restart: unless-stopped
 
   finance-db-init:
@@ -127,6 +128,7 @@ services:
       Chroma__TimeoutSeconds: ${CHROMA_TIMEOUT_SECONDS:?Set CHROMA_TIMEOUT_SECONDS in .env}
       Rag__KnowledgeFilesRoot: ${RAG_KNOWLEDGE_FILES_ROOT:?Set RAG_KNOWLEDGE_FILES_ROOT in .env}
       Rag__MaxChunkCharacters: ${RAG_MAX_CHUNK_CHARACTERS:?Set RAG_MAX_CHUNK_CHARACTERS in .env}
+      Rag__ChunkOverlapPercentage: ${RAG_CHUNK_OVERLAP_PERCENTAGE:?Set RAG_CHUNK_OVERLAP_PERCENTAGE in .env}
       Rag__MaxKnowledgeContextCharacters: ${RAG_MAX_KNOWLEDGE_CONTEXT_CHARACTERS:?Set RAG_MAX_KNOWLEDGE_CONTEXT_CHARACTERS in .env}
       Rag__MaximumRetrievalDistance: ${RAG_MAXIMUM_RETRIEVAL_DISTANCE:?Set RAG_MAXIMUM_RETRIEVAL_DISTANCE in .env}
       Mcp__Finance__Enabled: ${RAG_INIT_FINANCE_MCP_ENABLED:?Set RAG_INIT_FINANCE_MCP_ENABLED in .env}
