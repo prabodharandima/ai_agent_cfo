@@ -29,7 +29,7 @@ public sealed class CfoOrchestratorAgent(
             new ChatOptions { Instructions = AgentDefinitions.CfoOrchestrator.SystemInstructions },
             cancellationToken);
 
-        return TryParseIntent(response.Text, out var intent)
+        return TryParseIntent(response.Text, out var intent) && intent != CfoIntent.Unsupported
             ? intent
             : ClassifyDeterministically(message);
     }
@@ -58,11 +58,13 @@ public sealed class CfoOrchestratorAgent(
             var result = specialistResults.Length == 0
                 ? UnsupportedResult()
                 : resultComposer.Compose(specialistResults);
+
             _logger.LogInformation(
                 "CFO request completed. ResponseType: {ResponseType}; AgentCount: {AgentCount}; DurationMilliseconds: {DurationMilliseconds}",
                 result.ResponseType,
                 result.AgentNames.Count,
                 stopwatch.ElapsedMilliseconds);
+
             return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

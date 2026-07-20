@@ -53,6 +53,30 @@ public sealed class CfoOrchestratorAgentTests
         Assert.Equal(testIntent, fallbackIntent);
     }
 
+    [Theory]
+    [InlineData("What is the annual sales target and what assumptions were used?")]
+    [InlineData("What financial risks are documented for the business?")]
+    [InlineData("What planning assumptions should leadership review?")]
+    public async Task ClassifyAsync_ModelUnsupportedResponseFallsBackToKnowledgeRouting(string prompt)
+    {
+        using var client = new InvalidClassificationChatClient("Unsupported");
+        var orchestrator = new CfoOrchestratorAgent(null!, null!, null!, new AgentResultComposer(), client);
+
+        var intent = await orchestrator.ClassifyAsync(prompt);
+
+        Assert.Equal(CfoIntent.Knowledge, intent);
+    }
+
+    [Fact]
+    public void ClassificationPrompt_ExplainsKnowledgeAndMixedRouting()
+    {
+        var prompt = AgentPromptTemplates.ForClassification("What is the annual sales target and what assumptions were used?");
+
+        Assert.Contains("documented financial targets, assumptions, risks", prompt, StringComparison.Ordinal);
+        Assert.Contains("annual sales target and what assumptions were used", prompt, StringComparison.Ordinal);
+        Assert.Contains("=> Knowledge", prompt, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task HandleAsync_CombinesForecastAndKnowledgeForForecastAssumptions()
     {
@@ -168,7 +192,7 @@ public sealed class CfoOrchestratorAgentTests
     private static TestChatClient CreateClient(int simulatedDelayMilliseconds = 0) =>
         TestChatClient.CreateMvp(TimeSpan.FromMilliseconds(simulatedDelayMilliseconds));
 
-    private sealed class InvalidClassificationChatClient : IChatClient
+    private sealed class InvalidClassificationChatClient(string classificationResponse = "not-an-intent") : IChatClient
     {
         public ChatClientMetadata Metadata { get; } = new("Invalid", new Uri("https://invalid.local"), "invalid");
 
@@ -176,7 +200,7 @@ public sealed class CfoOrchestratorAgentTests
             IEnumerable<ChatMessage> messages,
             ChatOptions? options = null,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "not-an-intent")));
+            Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, classificationResponse)));
 
         public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
             IEnumerable<ChatMessage> messages,
