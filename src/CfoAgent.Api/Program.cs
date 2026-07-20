@@ -229,6 +229,10 @@ app.UseRateLimiter();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.UseSwaggerUI(options =>
+    {
+        options.SwaggerEndpoint("/openapi/v1.json", "CFO AI Agent API v1");
+    });
 }
 
 app.MapGet("/", (IOptions<ApplicationOptions> applicationOptions, IOptions<AiOptions> aiOptions) =>
