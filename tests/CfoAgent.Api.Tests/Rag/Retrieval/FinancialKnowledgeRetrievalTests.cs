@@ -9,8 +9,6 @@ using CfoAgent.Api.Rag.Chroma;
 using CfoAgent.Api.Rag.Embeddings;
 using CfoAgent.Api.Rag.Retrieval;
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Tests.Rag.Retrieval;
@@ -20,7 +18,7 @@ public sealed class FinancialKnowledgeRetrievalTests
     [Fact]
     public async Task RetrieveAsync_MapsFiltersAndDeduplicatesRelevantSources()
     {
-        var service = CreateRetrievalService(new KnowledgeHandler());
+        var service = CreateSearch(new KnowledgeHandler());
 
         var result = await service.RetrieveAsync(new FinancialKnowledgeQuery(
             "What is the annual target and which assumptions were used?",
@@ -39,7 +37,7 @@ public sealed class FinancialKnowledgeRetrievalTests
     [Fact]
     public async Task RetrieveAsync_ReturnsExplicitInsufficientKnowledgeWhenCollectionIsMissing()
     {
-        var service = CreateRetrievalService(new MissingCollectionHandler());
+        var service = CreateSearch(new MissingCollectionHandler());
 
         var result = await service.RetrieveAsync(new FinancialKnowledgeQuery("What is the annual target?"));
 
@@ -51,12 +49,11 @@ public sealed class FinancialKnowledgeRetrievalTests
     [Fact]
     public async Task FinancialKnowledgeAgent_AnswersFromRetrievedContextWithUniqueCitations()
     {
-        var retrieval = CreateRetrievalService(new KnowledgeHandler());
+        var retrieval = CreateSearch(new KnowledgeHandler());
         using var client = new MockChatClient(Options.Create(new AiOptions { Provider = "Mock", Model = "DeterministicMock" }));
-        using var services = new ServiceCollection().BuildServiceProvider();
         var agent = new FinancialKnowledgeAgent(
             retrieval,
-            new CfoAgentFramework(client, NullLoggerFactory.Instance, services),
+            client,
             Options.Create(new RagOptions { KnowledgeFilesRoot = "unused", MaxChunkCharacters = 256, MaxKnowledgeContextCharacters = 4000 }));
 
         var result = await agent.AnswerAsync(new AgentRequest("What is the annual target and what assumptions were used?"));
@@ -75,12 +72,11 @@ public sealed class FinancialKnowledgeRetrievalTests
     [Fact]
     public async Task FinancialKnowledgeAgent_DoesNotFabricateWhenKnowledgeIsMissing()
     {
-        var retrieval = CreateRetrievalService(new MissingCollectionHandler());
+        var retrieval = CreateSearch(new MissingCollectionHandler());
         using var client = new MockChatClient(Options.Create(new AiOptions { Provider = "Mock", Model = "DeterministicMock" }));
-        using var services = new ServiceCollection().BuildServiceProvider();
         var agent = new FinancialKnowledgeAgent(
             retrieval,
-            new CfoAgentFramework(client, NullLoggerFactory.Instance, services),
+            client,
             Options.Create(new RagOptions { KnowledgeFilesRoot = "unused", MaxChunkCharacters = 256, MaxKnowledgeContextCharacters = 4000 }));
 
         var result = await agent.AnswerAsync(new AgentRequest("What is the annual target?"));
@@ -90,7 +86,7 @@ public sealed class FinancialKnowledgeRetrievalTests
         Assert.Contains("has been ingested", Assert.Single(result.Warnings), StringComparison.OrdinalIgnoreCase);
     }
 
-    private static FinancialKnowledgeRetrievalService CreateRetrievalService(HttpMessageHandler handler)
+    private static ChromaFinancialKnowledgeSearch CreateSearch(HttpMessageHandler handler)
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000/") };
         var chroma = new ChromaClient(httpClient, Options.Create(new ChromaOptions
@@ -110,7 +106,7 @@ public sealed class FinancialKnowledgeRetrievalTests
             MaximumRetrievalDistance = 1.25f
         });
 
-        return new FinancialKnowledgeRetrievalService(chroma, embeddings, options);
+        return new ChromaFinancialKnowledgeSearch(chroma, embeddings, options);
     }
 
     private sealed class KnowledgeHandler : HttpMessageHandler

@@ -14,8 +14,6 @@ using CfoAgent.Api.Rag.Embeddings;
 using CfoAgent.Api.Rag.Retrieval;
 using CfoAgent.Api.Tests.Finance;
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Tests.Mcp;
@@ -23,16 +21,13 @@ namespace CfoAgent.Api.Tests.Mcp;
 public sealed class AgentMcpWiringTests
 {
     private static readonly DateOnly DemoDate = new(2026, 7, 15);
-    private static readonly TimeProvider Clock = new FixedTimeProvider(DemoDate);
-
     [Fact]
     public async Task SalesAgentUsesFinanceMcpWhenEnabled()
     {
         var mcpSummary = CreateSummary(975m);
         var mcp = new StubFinanceMcpClient { Summary = _ => Task.FromResult(mcpSummary) };
         using var client = CreateMockClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateSalesAgent(client, services, mcp);
+        var agent = CreateSalesAgent(client, mcp);
 
         var result = await agent.GetWeeklySummaryAsync(new AgentRequest("Show this week's sales."), CancellationToken.None);
 
@@ -48,8 +43,7 @@ public sealed class AgentMcpWiringTests
             Summary = _ => throw new McpDependencyException("Finance MCP", McpDependencyFailureKind.Disabled)
         };
         using var client = CreateMockClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateSalesAgent(client, services, mcp);
+        var agent = CreateSalesAgent(client, mcp);
 
         var exception = await Assert.ThrowsAsync<McpDependencyException>(() =>
             agent.GetWeeklySummaryAsync(new AgentRequest("Show this week's sales."), CancellationToken.None));
@@ -66,8 +60,7 @@ public sealed class AgentMcpWiringTests
             Summary = _ => throw new McpDependencyException("Finance MCP", McpDependencyFailureKind.Unavailable)
         };
         using var client = CreateMockClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateSalesAgent(client, services, mcp);
+        var agent = CreateSalesAgent(client, mcp);
 
         var exception = await Assert.ThrowsAsync<McpDependencyException>(() =>
             agent.GetWeeklySummaryAsync(new AgentRequest("Show this week's sales."), CancellationToken.None));
@@ -82,8 +75,7 @@ public sealed class AgentMcpWiringTests
         var historical = CreateHistoricalTotals();
         var mcp = new StubFinanceMcpClient { Historical = _ => Task.FromResult(historical) };
         using var client = CreateMockClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateForecastingAgent(client, services, mcp);
+        var agent = CreateForecastingAgent(client, mcp);
 
         var result = await agent.GetForecastAsync(new AgentRequest("Forecast sales."), CancellationToken.None);
 
@@ -98,8 +90,7 @@ public sealed class AgentMcpWiringTests
     {
         var mcp = new StubFinanceMcpClient { Historical = _ => Task.FromResult(CreateHistoricalTotals()) };
         using var client = CreateMockClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateForecastingAgent(client, services, mcp);
+        var agent = CreateForecastingAgent(client, mcp);
 
         var result = await agent.GetForecastAsync(new AgentRequest("Forecast sales."), CancellationToken.None);
 
@@ -110,35 +101,28 @@ public sealed class AgentMcpWiringTests
     }
 
     [Fact]
-    public async Task KnowledgeAgentUsesDirectRagWhenFileMcpIsDisabled()
+    public async Task KnowledgeAgentUsesChromaWithoutAFileMcpPreflight()
     {
         var handler = new KnowledgeHandler();
-        var fileMcp = new StubKnowledgeFileMcpClient();
         using var client = CreateMockClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateKnowledgeAgent(handler, client, services, fileMcp, knowledgeEnabled: false);
+        var agent = CreateKnowledgeAgent(handler, client);
 
         var result = await agent.AnswerAsync(new AgentRequest("What is the annual target?"));
 
-        Assert.Equal(0, fileMcp.ListCalls);
         Assert.Equal(1, handler.QueryCalls);
         Assert.Equal("data/knowledge/current-budget-and-target.md", Assert.Single(result.Sources).SourcePath);
     }
 
     [Fact]
-    public async Task KnowledgeAgentPreservesDirectRagResultsAfterFileMcpFallback()
+    public async Task KnowledgeAgentPropagatesChromaDependencyFailureWithoutConsultingFileMcp()
     {
-        var handler = new KnowledgeHandler();
-        var fileMcp = new StubKnowledgeFileMcpClient();
         using var client = CreateMockClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateKnowledgeAgent(handler, client, services, fileMcp, knowledgeEnabled: true);
+        var agent = CreateKnowledgeAgent(new UnavailableKnowledgeHandler(), client);
 
-        var result = await agent.AnswerAsync(new AgentRequest("What is the annual target?"));
+        var exception = await Assert.ThrowsAsync<ChromaDependencyException>(() =>
+            agent.AnswerAsync(new AgentRequest("What is the annual target?")));
 
-        Assert.Equal(1, fileMcp.ListCalls);
-        Assert.Equal(1, handler.QueryCalls);
-        Assert.Equal("data/knowledge/current-budget-and-target.md", Assert.Single(result.Sources).SourcePath);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, exception.StatusCode);
     }
 
     [Fact]
@@ -153,8 +137,7 @@ public sealed class AgentMcpWiringTests
             }
         };
         using var client = CreateMockClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateSalesAgent(client, services, mcp);
+        var agent = CreateSalesAgent(client, mcp);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 
@@ -170,8 +153,7 @@ public sealed class AgentMcpWiringTests
         var mcpSummary = CreateSummary(1234m);
         var mcp = new StubFinanceMcpClient { Summary = _ => Task.FromResult(mcpSummary) };
         using var client = CreateMockClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateSalesAgent(client, services, mcp);
+        var agent = CreateSalesAgent(client, mcp);
 
         var result = await agent.GetWeeklySummaryAsync(new AgentRequest("Show this week's sales."), CancellationToken.None);
 
@@ -181,31 +163,24 @@ public sealed class AgentMcpWiringTests
 
     private static SalesAnalysisAgent CreateSalesAgent(
         MockChatClient client,
-        IServiceProvider services,
         IFinanceMcpClient mcp)
     {
-        return new SalesAnalysisAgent(
-            new CfoAgentFramework(client, NullLoggerFactory.Instance, services),
-            mcp);
+        return new SalesAnalysisAgent(client, mcp);
     }
 
     private static ForecastingAgent CreateForecastingAgent(
         MockChatClient client,
-        IServiceProvider services,
         IFinanceMcpClient mcp)
     {
         return new ForecastingAgent(
             new SalesForecastingService(),
-            new CfoAgentFramework(client, NullLoggerFactory.Instance, services),
+            client,
             mcp);
     }
 
     private static FinancialKnowledgeAgent CreateKnowledgeAgent(
         HttpMessageHandler handler,
-        MockChatClient client,
-        IServiceProvider services,
-        IKnowledgeFileMcpClient fileMcp,
-        bool knowledgeEnabled)
+        MockChatClient client)
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000/") };
         var chroma = new ChromaClient(httpClient, Options.Create(new ChromaOptions
@@ -224,13 +199,12 @@ public sealed class AgentMcpWiringTests
             MaxKnowledgeContextCharacters = 4000,
             MaximumRetrievalDistance = 1.25f
         });
-        var retrieval = new FinancialKnowledgeRetrievalService(chroma, embeddings, ragOptions);
+        IFinancialKnowledgeSearch retrieval = new ChromaFinancialKnowledgeSearch(chroma, embeddings, ragOptions);
 
         return new FinancialKnowledgeAgent(
             retrieval,
-            new CfoAgentFramework(client, NullLoggerFactory.Instance, services),
-            ragOptions,
-            knowledgeEnabled ? fileMcp : null);
+            client,
+            ragOptions);
     }
 
     private static SalesSummary CreateSummary(decimal revenue) => new(
@@ -290,22 +264,6 @@ public sealed class AgentMcpWiringTests
         public Task<BudgetTargetResult> GetBudgetTargetAsync(int year, int? month, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 
-    private sealed class StubKnowledgeFileMcpClient : IKnowledgeFileMcpClient
-    {
-        public Func<CancellationToken, Task<IReadOnlyList<string>>> List { get; init; } =
-            _ => Task.FromResult<IReadOnlyList<string>>(["current-budget-and-target.md"]);
-
-        public int ListCalls { get; private set; }
-
-        public Task<IReadOnlyList<string>> ListFilesAsync(CancellationToken cancellationToken)
-        {
-            ListCalls++;
-            return List(cancellationToken);
-        }
-
-        public Task<string> ReadFileAsync(string relativePath, CancellationToken cancellationToken) => throw new NotSupportedException();
-    }
-
     private sealed class KnowledgeHandler : HttpMessageHandler
     {
         public int QueryCalls { get; private set; }
@@ -339,6 +297,12 @@ public sealed class AgentMcpWiringTests
 
             throw new InvalidOperationException($"Unexpected Chroma request: {request.RequestUri}");
         }
+    }
+
+    private sealed class UnavailableKnowledgeHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
     }
 
     private static HttpResponseMessage JsonResponse(string content) => new(HttpStatusCode.OK)

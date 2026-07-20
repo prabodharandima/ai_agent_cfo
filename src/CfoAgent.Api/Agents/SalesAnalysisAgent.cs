@@ -1,13 +1,14 @@
+using CfoAgent.Api.AI;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
 using CfoAgent.Api.Features.Sales;
 using CfoAgent.Api.Mcp;
-using Microsoft.Agents.AI;
+using Microsoft.Extensions.AI;
 
 namespace CfoAgent.Api.Agents;
 
 public sealed class SalesAnalysisAgent(
-    CfoAgentFramework agentFramework,
+    IChatClient chatClient,
     IFinanceMcpClient financeMcpClient)
 {
     public async Task<AgentResult> GetWeeklySummaryAsync(AgentRequest request, CancellationToken cancellationToken)
@@ -16,7 +17,7 @@ public sealed class SalesAnalysisAgent(
 
         try
         {
-            var summary = await financeMcpClient.GetCurrentWeekSummaryAsync(request.Message, cancellationToken);
+            var summary = await financeMcpClient.GetCurrentWeekSummaryAsync(cancellationToken);
             var answer = await GetAnswerAsync(AgentPromptTemplates.ForSalesSummary(summary), cancellationToken);
 
             return new AgentResult(
@@ -37,6 +38,10 @@ public sealed class SalesAnalysisAgent(
         {
             throw;
         }
+        catch (LlmDependencyException)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             throw new InvalidOperationException("The sales analysis agent could not produce a weekly summary.", exception);
@@ -49,7 +54,7 @@ public sealed class SalesAnalysisAgent(
 
         try
         {
-            var comparison = await financeMcpClient.GetWeekOverWeekComparisonAsync(request.Message, cancellationToken);
+            var comparison = await financeMcpClient.GetWeekOverWeekComparisonAsync(cancellationToken);
             var answer = await GetAnswerAsync(AgentPromptTemplates.ForSalesComparison(comparison), cancellationToken);
             var warnings = comparison.CurrentWeek.Warnings
                 .Concat(comparison.PreviousWeek.Warnings)
@@ -75,6 +80,10 @@ public sealed class SalesAnalysisAgent(
         {
             throw;
         }
+        catch (LlmDependencyException)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             throw new InvalidOperationException("The sales analysis agent could not produce a weekly comparison.", exception);
@@ -87,7 +96,7 @@ public sealed class SalesAnalysisAgent(
 
         try
         {
-            var topProducts = await financeMcpClient.GetCurrentMonthTopProductsAsync(request.Message, cancellationToken);
+            var topProducts = await financeMcpClient.GetCurrentMonthTopProductsAsync(cancellationToken);
             var answer = await GetAnswerAsync(AgentPromptTemplates.ForTopProducts(topProducts), cancellationToken);
 
             return new AgentResult(
@@ -108,6 +117,10 @@ public sealed class SalesAnalysisAgent(
         {
             throw;
         }
+        catch (LlmDependencyException)
+        {
+            throw;
+        }
         catch (Exception exception)
         {
             throw new InvalidOperationException("The sales analysis agent could not produce a top-products result.", exception);
@@ -116,9 +129,10 @@ public sealed class SalesAnalysisAgent(
 
     private async Task<string> GetAnswerAsync(string prompt, CancellationToken cancellationToken)
     {
-        var agent = agentFramework.CreateAgent(AgentDefinitions.SalesAnalysis);
-        var session = await agent.CreateSessionAsync(cancellationToken);
-        var response = await agent.RunAsync(prompt, session, options: null, cancellationToken);
+        var response = await chatClient.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, prompt)],
+            new ChatOptions { Instructions = AgentDefinitions.SalesAnalysis.SystemInstructions },
+            cancellationToken);
 
         return response.Text;
     }

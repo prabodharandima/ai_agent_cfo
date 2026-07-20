@@ -84,6 +84,7 @@ builder.Services.AddScoped<SalesForecastingService>();
 builder.Services.AddScoped<SalesAnalysisAgent>();
 builder.Services.AddScoped<ForecastingAgent>();
 builder.Services.AddScoped<FinancialKnowledgeAgent>();
+builder.Services.AddSingleton<AgentResultComposer>();
 builder.Services.AddScoped<CfoOrchestratorAgent>();
 builder.Services.AddHttpClient(AiOptions.OllamaHttpClientName, (serviceProvider, client) =>
 {
@@ -112,10 +113,9 @@ builder.Services.AddSingleton<IChatClient>(serviceProvider =>
 
     throw new InvalidOperationException("AI provider configuration was not validated.");
 });
-builder.Services.AddSingleton<CfoAgentFramework>();
 builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>, DeterministicTokenHashEmbeddingGenerator>();
 builder.Services.AddScoped<RagDocumentIngestionService>();
-builder.Services.AddScoped<FinancialKnowledgeRetrievalService>();
+builder.Services.AddScoped<IFinancialKnowledgeSearch, ChromaFinancialKnowledgeSearch>();
 builder.Services.AddHttpClient(McpToolAdapter.FinanceHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddHttpClient(McpToolAdapter.KnowledgeFilesHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddKeyedSingleton<IMcpToolAdapter>(McpToolAdapter.FinanceKey, (serviceProvider, _) =>
@@ -150,7 +150,6 @@ builder.Services.AddSingleton<IFinanceMcpRemoteClient>(serviceProvider => servic
 builder.Services.AddSingleton<KnowledgeFileMcpClient>();
 builder.Services.AddSingleton<IKnowledgeFileMcpRemoteClient, KnowledgeFileMcpHttpClient>();
 builder.Services.AddSingleton<IKnowledgeFileMcpClient, KnowledgeFileMcpAccess>();
-builder.Services.AddSingleton<KnowledgeFileMcpFallback>();
 
 builder.Services.AddCors(options =>
 {

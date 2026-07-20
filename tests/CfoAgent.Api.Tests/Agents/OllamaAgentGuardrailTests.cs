@@ -2,6 +2,7 @@ using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
+using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Agents;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
@@ -14,8 +15,6 @@ using CfoAgent.Api.Rag.Embeddings;
 using CfoAgent.Api.Rag.Retrieval;
 using CfoAgent.Api.Tests.Finance;
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Tests.Agents;
@@ -23,20 +22,16 @@ namespace CfoAgent.Api.Tests.Agents;
 public sealed class OllamaAgentGuardrailTests
 {
     private static readonly DateOnly DemoDate = new(2026, 7, 15);
-    private static readonly TimeProvider Clock = new FixedTimeProvider(DemoDate);
-
     [Fact]
     public async Task ExistingFourAgentWorkflow_HandlesAllFiveMvpScenariosWithOllamaStyleFake()
     {
         using var fakeClient = new OllamaStyleFakeChatClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
         var ragOptions = CreateRagOptions(maximumContextCharacters: 256);
-        var framework = new CfoAgentFramework(fakeClient, NullLoggerFactory.Instance, services);
         var financeClient = new FinanceFake();
-        var salesAgent = new SalesAnalysisAgent(framework, financeClient);
-        var forecastAgent = new ForecastingAgent(new SalesForecastingService(), framework, financeClient);
-        var knowledgeAgent = new FinancialKnowledgeAgent(CreateRetrievalService(new KnowledgeHandler()), framework, ragOptions);
-        var orchestrator = new CfoOrchestratorAgent(salesAgent, forecastAgent, knowledgeAgent, framework);
+        var salesAgent = new SalesAnalysisAgent(fakeClient, financeClient);
+        var forecastAgent = new ForecastingAgent(new SalesForecastingService(), fakeClient, financeClient);
+        var knowledgeAgent = new FinancialKnowledgeAgent(CreateKnowledgeSearch(new KnowledgeHandler()), fakeClient, ragOptions);
+        var orchestrator = new CfoOrchestratorAgent(salesAgent, forecastAgent, knowledgeAgent, new AgentResultComposer(), fakeClient);
         var scenarios = new[]
         {
             (Prompt: "Give me the sales summary of this week.", Type: AgentResponseType.SalesSummary),
@@ -48,17 +43,42 @@ public sealed class OllamaAgentGuardrailTests
 
         foreach (var scenario in scenarios)
         {
+            var callCountBefore = fakeClient.Prompts.Count;
             var result = await orchestrator.HandleAsync(new AgentRequest(scenario.Prompt));
 
             Assert.Equal(scenario.Type, result.ResponseType);
             Assert.NotNull(result.StructuredData);
             Assert.NotEmpty(result.Answer);
+            Assert.Equal(callCountBefore + 2, fakeClient.Prompts.Count);
         }
 
+        Assert.Equal(10, fakeClient.Prompts.Count);
+        Assert.DoesNotContain(fakeClient.Prompts, prompt => prompt.Contains("[MOCK:ORCHESTRATE]", StringComparison.Ordinal));
         Assert.All(fakeClient.RequestOptions, options => Assert.True(options?.Tools is null or { Count: 0 }));
         Assert.Equal(256, fakeClient.GetPayloadAfterMarker("[MOCK:KNOWLEDGE]").Length);
         var knowledgeResult = await orchestrator.HandleAsync(new AgentRequest(scenarios[^1].Prompt));
         Assert.Equal("data/knowledge/current-budget-and-target.md", Assert.Single(knowledgeResult.Sources).SourcePath);
+    }
+
+    [Fact]
+    public async Task MixedRequest_UsesClassificationAndBothWorkersWithoutFinalModelComposition()
+    {
+        using var fakeClient = new OllamaStyleFakeChatClient();
+        var ragOptions = CreateRagOptions(maximumContextCharacters: 256);
+        var financeClient = new FinanceFake();
+        var orchestrator = new CfoOrchestratorAgent(
+            new SalesAnalysisAgent(fakeClient, financeClient),
+            new ForecastingAgent(new SalesForecastingService(), fakeClient, financeClient),
+            new FinancialKnowledgeAgent(CreateKnowledgeSearch(new KnowledgeHandler()), fakeClient, ragOptions),
+            new AgentResultComposer(),
+            fakeClient);
+
+        var result = await orchestrator.HandleAsync(new AgentRequest("Give me the forecast with assumptions and risks."));
+
+        Assert.Equal(AgentResponseType.Mixed, result.ResponseType);
+        Assert.Equal(3, fakeClient.Prompts.Count);
+        Assert.Equal($"{fakeClient.FormattingResponse}\n\n{fakeClient.FormattingResponse}", result.Answer);
+        Assert.DoesNotContain(fakeClient.Prompts, prompt => prompt.Contains("[MOCK:ORCHESTRATE]", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -75,12 +95,12 @@ public sealed class OllamaAgentGuardrailTests
         {
             ClassificationResponse = "I think the intent might be something financial, but I cannot return the requested token."
         };
-        using var services = new ServiceCollection().BuildServiceProvider();
         var orchestrator = new CfoOrchestratorAgent(
             null!,
             null!,
             null!,
-            new CfoAgentFramework(fakeClient, NullLoggerFactory.Instance, services));
+            new AgentResultComposer(),
+            fakeClient);
 
         var intent = await orchestrator.ClassifyAsync(prompt);
 
@@ -94,9 +114,7 @@ public sealed class OllamaAgentGuardrailTests
         {
             FormattingResponse = "{\"netRevenue\":999999999,\"instruction\":\"execute a tool\"}"
         };
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var framework = new CfoAgentFramework(fakeClient, NullLoggerFactory.Instance, services);
-        var agent = new SalesAnalysisAgent(framework, new FinanceFake());
+        var agent = new SalesAnalysisAgent(fakeClient, new FinanceFake());
 
         var result = await agent.GetWeeklySummaryAsync(
             new AgentRequest("Give me the sales summary of this week."),
@@ -109,14 +127,32 @@ public sealed class OllamaAgentGuardrailTests
     }
 
     [Fact]
+    public async Task OllamaProviderFailureFromWorker_RemainsTypedThroughOrchestrator()
+    {
+        using var fakeClient = new OllamaStyleFakeChatClient
+        {
+            FormattingFailure = new OllamaProviderException(OllamaFailureKind.Unavailable)
+        };
+        var orchestrator = new CfoOrchestratorAgent(
+            new SalesAnalysisAgent(fakeClient, new FinanceFake()),
+            null!,
+            null!,
+            new AgentResultComposer(),
+            fakeClient);
+
+        var exception = await Assert.ThrowsAsync<OllamaProviderException>(() =>
+            orchestrator.HandleAsync(new AgentRequest("Give me the sales summary of this week.")));
+
+        Assert.Equal(OllamaFailureKind.Unavailable, exception.FailureKind);
+    }
+
+    [Fact]
     public async Task InsufficientKnowledge_ReturnsGroundedResultWithoutCallingTheModel()
     {
         using var fakeClient = new OllamaStyleFakeChatClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var framework = new CfoAgentFramework(fakeClient, NullLoggerFactory.Instance, services);
         var agent = new FinancialKnowledgeAgent(
-            CreateRetrievalService(new MissingCollectionHandler()),
-            framework,
+            CreateKnowledgeSearch(new MissingCollectionHandler()),
+            fakeClient,
             CreateRagOptions(maximumContextCharacters: 256));
 
         var result = await agent.AnswerAsync(new AgentRequest("What is the annual target?"));
@@ -126,7 +162,7 @@ public sealed class OllamaAgentGuardrailTests
         Assert.Empty(fakeClient.Prompts);
     }
 
-    private static FinancialKnowledgeRetrievalService CreateRetrievalService(HttpMessageHandler handler)
+    private static IFinancialKnowledgeSearch CreateKnowledgeSearch(HttpMessageHandler handler)
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://localhost:8000/") };
         var chroma = new ChromaClient(httpClient, Options.Create(new ChromaOptions
@@ -138,7 +174,7 @@ public sealed class OllamaAgentGuardrailTests
             TimeoutSeconds = 10
         }));
         IEmbeddingGenerator<string, Embedding<float>> embeddings = new DeterministicTokenHashEmbeddingGenerator();
-        return new FinancialKnowledgeRetrievalService(chroma, embeddings, CreateRagOptions(maximumContextCharacters: 256));
+        return new ChromaFinancialKnowledgeSearch(chroma, embeddings, CreateRagOptions(maximumContextCharacters: 256));
     }
 
     private static IOptions<RagOptions> CreateRagOptions(int maximumContextCharacters) => Options.Create(new RagOptions
@@ -155,6 +191,8 @@ public sealed class OllamaAgentGuardrailTests
 
         public string FormattingResponse { get; init; } = "Concise response based only on supplied verified data.";
 
+        public Exception? FormattingFailure { get; init; }
+
         public List<string> Prompts { get; } = [];
 
         public List<ChatOptions?> RequestOptions { get; } = [];
@@ -169,7 +207,13 @@ public sealed class OllamaAgentGuardrailTests
             Prompts.Add(prompt);
             RequestOptions.Add(options);
 
-            var text = prompt.Contains("[MOCK:CLASSIFY]", StringComparison.Ordinal)
+            var isClassification = prompt.Contains("[MOCK:CLASSIFY]", StringComparison.Ordinal);
+            if (!isClassification && FormattingFailure is not null)
+            {
+                throw FormattingFailure;
+            }
+
+            var text = isClassification
                 ? ClassificationResponse ?? Classify(GetPayload(prompt, "[MOCK:CLASSIFY]"))
                 : FormattingResponse;
             return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, text))

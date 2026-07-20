@@ -1,7 +1,7 @@
 using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Mcp;
-using CfoAgent.Api.Rag.Chroma;
+using CfoAgent.Api.Rag.Retrieval;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -20,11 +20,11 @@ public sealed class ApiExceptionHandler(
             OllamaProviderException { FailureKind: OllamaFailureKind.Timeout } => (StatusCodes.Status504GatewayTimeout, "The selected model provider timed out."),
             OllamaProviderException { FailureKind: OllamaFailureKind.Unavailable } => (StatusCodes.Status503ServiceUnavailable, "The selected model provider is temporarily unavailable."),
             OllamaProviderException => (StatusCodes.Status503ServiceUnavailable, "The selected model provider returned an unusable response."),
-            ChromaDependencyException => (StatusCodes.Status503ServiceUnavailable, "A required dependency is temporarily unavailable."),
+            VectorSearchDependencyException => (StatusCodes.Status503ServiceUnavailable, "A required dependency is temporarily unavailable."),
             McpDependencyException => (StatusCodes.Status503ServiceUnavailable, "A required dependency is temporarily unavailable."),
             TimeoutException => (StatusCodes.Status504GatewayTimeout, "The request timed out."),
             OperationCanceledException when !httpContext.RequestAborted.IsCancellationRequested => (StatusCodes.Status504GatewayTimeout, "The request timed out."),
-            InvalidOperationException => (StatusCodes.Status503ServiceUnavailable, "The requested operation is temporarily unavailable."),
+            InvalidOperationException => (StatusCodes.Status503ServiceUnavailable, "CFO assistant is temporarily unavailable."),
             _ => (StatusCodes.Status500InternalServerError, "An unexpected server error occurred.")
         };
 

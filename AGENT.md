@@ -20,7 +20,7 @@ Both use the official `ModelContextProtocol` C# SDK over Streamable HTTP on the 
 - Knowledge File MCP has a secure local fallback only when explicitly enabled in Development. Containers disable it. ChromaDB remains the semantic retrieval and citation system in every mode.
 - Financial summaries, comparisons, rankings, dates, percentages, and forecast values are deterministic C# and SQL results. An LLM never creates authoritative finance values.
 - `MockChatClient` is the committed default. Optional host Ollama is selected only through `IChatClient` configuration and is reached from containers at `host.docker.internal`. No cloud provider is implemented.
-- Preserve exactly four agents, the approved five Finance MCP tools, and the two Knowledge File MCP tools. An `IChatClient` may make bounded MCP tool selections only from the discovered, configured allow-list for the current business operation; it must never choose arbitrary endpoints, unapproved tools, or authoritative finance arguments. Do not add auth, streaming, history, CQRS, MediatR, extra agents, write MCP operations, or microservices beyond the two approved hosted MCP services.
+- Preserve exactly four agents, the approved five Finance MCP tools, and the two Knowledge File MCP tools. The typed Finance MCP client selects only its fixed, configured-approved tool and supplies deterministic canonical arguments; `IChatClient` classifies requests and explains verified results but never selects MCP tools, endpoints, or authoritative finance arguments. Do not add auth, streaming, history, CQRS, MediatR, extra agents, write MCP operations, or microservices beyond the two approved hosted MCP services.
 
 ## Current deployment
 
@@ -42,14 +42,14 @@ Docker Compose publishes the frontend on `5173` and retains API port `5260` as a
 
 - `AI:Provider` is `Mock` by default. Set `Ollama` with `AI:Model=llama3.2:3b` and a local base URL only for opt-in local use.
 - `Mcp:Finance:BaseUrl` and `Mcp:KnowledgeFiles:BaseUrl` are absolute HTTP URLs. In Compose they are `http://finance-mcp:8080` and `http://knowledge-mcp:8080`.
-- `Mcp:Finance:AllowedToolNames` and `Mcp:KnowledgeFiles:AllowedToolNames` are the explicit MCP approval boundary. The shared adapter discovers tools with the official SDK, caches only approved metadata for its connection, and refreshes discovery after reconnect.
+- `Mcp:Finance:AllowedToolNames` and `Mcp:KnowledgeFiles:AllowedToolNames` are the explicit MCP approval boundary. The shared adapter discovers tools with the official SDK, caches only approved metadata for its connection, validates each requested operation, and refreshes discovery after reconnect.
 - `Mcp:KnowledgeFiles:UseLocalFallback` is Development-only and is `false` in containers.
 - `Chroma:BaseUrl` is `http://chromadb:8000` in Compose.
 - Finance PostgreSQL credentials are supplied only to Finance MCP and the one-shot initializer; never add them to API configuration.
 
 Use `/health/live` for process liveness and `/health/ready` for dependencies. Health checks are finite and do not reveal connection strings, file roots, prompts, SQL, or stack traces.
 
-The MCP integration flow is: connect to the configured endpoint, SDK initialization, `tools/list`, allow-list filtering/cache, bounded `IChatClient` tool selection where a business operation requires it, selection and canonical-argument validation, then `tools/call`. Finance typed facades retain deterministic arguments/result mapping; Knowledge raw file reads never replace ChromaDB retrieval. See `docs/MCP-INTEGRATION-REFACTOR-RESULTS.md` for the detailed behavior and validation evidence.
+The MCP integration flow is: connect to the configured endpoint, SDK initialization, `tools/list`, allow-list filtering/cache, requested-operation validation, canonical-argument validation in the typed Finance facade, then `tools/call`. `IChatClient` is used only for bounded classification and verified-result prose. Finance typed facades retain deterministic arguments/result mapping; Knowledge raw file reads never replace ChromaDB retrieval. See `docs/MCP-INTEGRATION-REFACTOR-RESULTS.md` and `docs/CFO-AGENT-API-REFACTOR-RESULTS.md` for detailed behavior and validation evidence.
 
 ## Local workflow and validation
 

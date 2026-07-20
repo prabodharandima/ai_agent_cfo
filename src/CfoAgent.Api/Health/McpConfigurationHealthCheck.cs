@@ -8,6 +8,7 @@ namespace CfoAgent.Api.Health;
 public sealed class McpConfigurationHealthCheck(
     IOptions<McpOptions> options,
     IFinanceMcpRemoteClient financeClient,
+    IKnowledgeFileMcpRemoteClient knowledgeRemoteClient,
     IKnowledgeFileMcpClient knowledgeClient) : IHealthCheck
 {
     public async Task<HealthCheckResult> CheckHealthAsync(
@@ -37,7 +38,22 @@ public sealed class McpConfigurationHealthCheck(
         }
 
         var knowledge = options.Value.KnowledgeFiles;
-        if (knowledge.Enabled || knowledge.UseLocalFallback)
+        if (knowledge.Enabled)
+        {
+            try
+            {
+                await knowledgeRemoteClient.DiscoverToolsAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (McpDependencyException)
+            {
+                problems.Add("Knowledge File MCP is unavailable.");
+            }
+        }
+        else if (knowledge.UseLocalFallback)
         {
             try
             {

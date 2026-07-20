@@ -8,8 +8,6 @@ using CfoAgent.Api.Features.Forecasting;
 using CfoAgent.Api.Features.Sales;
 using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Tests.Finance;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Tests.Agents;
@@ -17,14 +15,11 @@ namespace CfoAgent.Api.Tests.Agents;
 public sealed class PhaseTwoAgentGateTests
 {
     private static readonly DateOnly DemoDate = new(2026, 7, 15);
-    private static readonly TimeProvider Clock = new FixedTimeProvider(DemoDate);
-
     [Fact]
     public async Task SalesAgentUsesMcpResultsAndIncludesTheVerifiedPayloadInItsAnswer()
     {
         using var client = CreateClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateSalesAgent(client, services, new FakeFinanceMcpClient());
+        var agent = CreateSalesAgent(client, new FakeFinanceMcpClient());
         var request = new AgentRequest("Give me this week's sales summary.");
 
         var summary = await agent.GetWeeklySummaryAsync(request, CancellationToken.None);
@@ -44,8 +39,7 @@ public sealed class PhaseTwoAgentGateTests
     public async Task ForecastAgentReturnsVerifiedMcpHistoricalInputsAndDeterministicPayload()
     {
         using var client = CreateClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateForecastingAgent(client, services, new FakeFinanceMcpClient());
+        var agent = CreateForecastingAgent(client, new FakeFinanceMcpClient());
 
         var result = await agent.GetForecastAsync(new AgentRequest("Give me the sales forecast."), CancellationToken.None);
 
@@ -62,9 +56,8 @@ public sealed class PhaseTwoAgentGateTests
     public async Task ForecastAgentReturnsInsufficientDataWarningsWithoutInventingValues()
     {
         using var client = CreateClient();
-        using var services = new ServiceCollection().BuildServiceProvider();
         var mcp = new FakeFinanceMcpClient { Historical = new HistoricalYearlySalesResult([], Array.Empty<string>()) };
-        var agent = CreateForecastingAgent(client, services, mcp);
+        var agent = CreateForecastingAgent(client, mcp);
 
         var result = await agent.GetForecastAsync(new AgentRequest("Give me the sales forecast."), CancellationToken.None);
 
@@ -78,10 +71,9 @@ public sealed class PhaseTwoAgentGateTests
     public async Task SalesAgentPropagatesCancellationFromTheMockClient()
     {
         using var client = CreateClient(simulatedDelayMilliseconds: 5_000);
-        using var services = new ServiceCollection().BuildServiceProvider();
         using var cancellationSource = new CancellationTokenSource();
         cancellationSource.CancelAfter(TimeSpan.FromMilliseconds(25));
-        var agent = CreateSalesAgent(client, services, new FakeFinanceMcpClient());
+        var agent = CreateSalesAgent(client, new FakeFinanceMcpClient());
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             agent.GetWeeklySummaryAsync(new AgentRequest("Give me this week's sales summary."), cancellationSource.Token));
@@ -91,8 +83,7 @@ public sealed class PhaseTwoAgentGateTests
     public async Task ForecastAgentWrapsSimulatedMockFailureAsAControlledAgentError()
     {
         using var client = CreateClient(simulateFailure: true);
-        using var services = new ServiceCollection().BuildServiceProvider();
-        var agent = CreateForecastingAgent(client, services, new FakeFinanceMcpClient());
+        var agent = CreateForecastingAgent(client, new FakeFinanceMcpClient());
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             agent.GetForecastAsync(new AgentRequest("Give me the sales forecast."), CancellationToken.None));
@@ -101,11 +92,11 @@ public sealed class PhaseTwoAgentGateTests
         Assert.IsType<InvalidOperationException>(exception.InnerException);
     }
 
-    private static SalesAnalysisAgent CreateSalesAgent(MockChatClient client, IServiceProvider services, IFinanceMcpClient mcp) =>
-        new(new CfoAgentFramework(client, NullLoggerFactory.Instance, services), mcp);
+    private static SalesAnalysisAgent CreateSalesAgent(MockChatClient client, IFinanceMcpClient mcp) =>
+        new(client, mcp);
 
-    private static ForecastingAgent CreateForecastingAgent(MockChatClient client, IServiceProvider services, IFinanceMcpClient mcp) =>
-        new(new SalesForecastingService(), new CfoAgentFramework(client, NullLoggerFactory.Instance, services), mcp);
+    private static ForecastingAgent CreateForecastingAgent(MockChatClient client, IFinanceMcpClient mcp) =>
+        new(new SalesForecastingService(), client, mcp);
 
     private static MockChatClient CreateClient(int simulatedDelayMilliseconds = 0, bool simulateFailure = false) => new(Options.Create(new AiOptions
     {

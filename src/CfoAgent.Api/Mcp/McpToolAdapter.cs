@@ -61,28 +61,27 @@ public sealed class McpToolAdapter : IMcpToolAdapter, IAsyncDisposable
         this.logger = logger;
     }
 
-    public Task<IReadOnlyList<McpClientTool>> GetApprovedToolsAsync(
-        IEnumerable<string>? operationToolNames,
+    public Task<IReadOnlyList<string>> GetApprovedToolNamesAsync(
+        IEnumerable<string>? requiredToolNames,
         CancellationToken cancellationToken)
     {
         EnsureEnabled();
         return ExecuteDependencyOperationAsync(async token =>
         {
             var tools = await GetOrDiscoverToolsAsync(token);
-            if (operationToolNames is null)
+            if (requiredToolNames is null)
             {
-                return (IReadOnlyList<McpClientTool>)tools.Values.OrderBy(tool => tool.Name, StringComparer.Ordinal).ToArray();
+                return (IReadOnlyList<string>)tools.Keys.OrderBy(name => name, StringComparer.Ordinal).ToArray();
             }
 
-            var requestedNames = operationToolNames.ToHashSet(StringComparer.Ordinal);
+            var requestedNames = requiredToolNames.ToHashSet(StringComparer.Ordinal);
             if (requestedNames.Count == 0 || requestedNames.Any(name => !allowedToolNames.Contains(name) || !tools.ContainsKey(name)))
             {
                 throw new McpDependencyException(dependencyName, McpDependencyFailureKind.CapabilityMismatch);
             }
 
-            return (IReadOnlyList<McpClientTool>)requestedNames
-                .Select(name => tools[name])
-                .OrderBy(tool => tool.Name, StringComparer.Ordinal)
+            return (IReadOnlyList<string>)requestedNames
+                .OrderBy(name => name, StringComparer.Ordinal)
                 .ToArray();
         }, cancellationToken);
     }
@@ -161,11 +160,6 @@ public sealed class McpToolAdapter : IMcpToolAdapter, IAsyncDisposable
                 {
                     throw new McpDependencyException(dependencyName, McpDependencyFailureKind.CapabilityMismatch);
                 }
-            }
-
-            if (allowedToolNames.Any(name => !discoveredByName.ContainsKey(name)))
-            {
-                throw new McpDependencyException(dependencyName, McpDependencyFailureKind.CapabilityMismatch);
             }
 
             approvedTools = discoveredByName

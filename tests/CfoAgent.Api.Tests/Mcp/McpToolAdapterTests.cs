@@ -1,14 +1,9 @@
 using System.Text.Json;
-using CfoAgent.Api.Agents.Configuration;
-using CfoAgent.Api.AI.Mock;
-using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Mcp;
 using CfoAgent.KnowledgeFileMcpServer;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using KnowledgeMcpProgram = CfoAgent.KnowledgeFileMcpServer.Program;
 
 namespace CfoAgent.Api.Tests.Mcp;
@@ -16,7 +11,7 @@ namespace CfoAgent.Api.Tests.Mcp;
 public sealed class McpToolAdapterTests
 {
     [Fact]
-    public async Task DiscoversCachesPresentsAndInvokesApprovedToolSelectedByMock()
+    public async Task DiscoversCachesAndInvokesApprovedTool()
     {
         var root = CreateKnowledgeRoot();
         await File.WriteAllTextAsync(Path.Combine(root, "budget.md"), "approved budget", CancellationToken.None);
@@ -27,30 +22,13 @@ public sealed class McpToolAdapterTests
             using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("http://knowledge-mcp.test") };
             await using var adapter = CreateAdapter(httpClient, ["list_knowledge_files", "read_knowledge_file"]);
 
-            var firstDiscovery = await adapter.GetApprovedToolsAsync(null, CancellationToken.None);
-            var secondDiscovery = await adapter.GetApprovedToolsAsync(null, CancellationToken.None);
-            var framework = CreateFramework(new MockChatClient(Options.Create(new AiOptions())));
+            var firstDiscovery = await adapter.GetApprovedToolNamesAsync(null, CancellationToken.None);
+            var secondDiscovery = await adapter.GetApprovedToolNamesAsync(null, CancellationToken.None);
             var arguments = new Dictionary<string, object?> { ["relativePath"] = "budget.md" };
+            var result = await adapter.CallApprovedToolAsync("read_knowledge_file", arguments, CancellationToken.None);
 
-            var firstSelection = await framework.SelectMcpToolAsync(
-                "Knowledge File MCP",
-                "Read the budget knowledge file.",
-                firstDiscovery,
-                arguments,
-                CancellationToken.None);
-            var secondSelection = await framework.SelectMcpToolAsync(
-                "Knowledge File MCP",
-                "Read the budget knowledge file.",
-                firstDiscovery,
-                arguments,
-                CancellationToken.None);
-            var result = await adapter.CallApprovedToolAsync(firstSelection.Name, arguments, CancellationToken.None);
-
-            Assert.Equal(["list_knowledge_files", "read_knowledge_file"], firstDiscovery.Select(tool => tool.Name));
-            Assert.Same(firstDiscovery[0], secondDiscovery[0]);
-            Assert.All(firstDiscovery, tool => Assert.Equal(JsonValueKind.Object, tool.JsonSchema.ValueKind));
-            Assert.Equal("read_knowledge_file", firstSelection.Name);
-            Assert.Equal(firstSelection.Name, secondSelection.Name);
+            Assert.Equal(["list_knowledge_files", "read_knowledge_file"], firstDiscovery);
+            Assert.Equal(firstDiscovery, secondDiscovery);
             Assert.Equal("approved budget", result.GetString());
             Assert.Equal(1, handler.ToolsListCalls);
             Assert.Equal(1, handler.ToolsCallCalls);
@@ -99,14 +77,14 @@ public sealed class McpToolAdapterTests
             });
             await using var adapter = CreateAdapter(httpClient, ["list_knowledge_files"]);
 
-            var approved = await adapter.GetApprovedToolsAsync(null, CancellationToken.None);
+            var approved = await adapter.GetApprovedToolNamesAsync(null, CancellationToken.None);
             var exception = await Assert.ThrowsAsync<McpDependencyException>(() =>
                 adapter.CallApprovedToolAsync(
                     "read_knowledge_file",
                     new Dictionary<string, object?> { ["relativePath"] = "anything.md" },
                     CancellationToken.None));
 
-            Assert.Equal("list_knowledge_files", Assert.Single(approved).Name);
+            Assert.Equal("list_knowledge_files", Assert.Single(approved));
             Assert.Equal(McpDependencyFailureKind.CapabilityMismatch, exception.FailureKind);
         }
         finally
@@ -129,7 +107,7 @@ public sealed class McpToolAdapterTests
             await using var adapter = CreateAdapter(httpClient, ["removed_read_tool"]);
 
             var exception = await Assert.ThrowsAsync<McpDependencyException>(() =>
-                adapter.GetApprovedToolsAsync(null, CancellationToken.None));
+                adapter.CallApprovedToolAsync("removed_read_tool", null, CancellationToken.None));
 
             Assert.Equal(McpDependencyFailureKind.CapabilityMismatch, exception.FailureKind);
         }
@@ -169,7 +147,7 @@ public sealed class McpToolAdapterTests
     }
 
     [Fact]
-    public async Task ModelArgumentsMustMatchCanonicalArguments()
+    public async Task MissingUnrelatedAllowedToolDoesNotBreakAHealthyRequiredOperation()
     {
         var root = CreateKnowledgeRoot();
         try
@@ -179,19 +157,13 @@ public sealed class McpToolAdapterTests
             {
                 BaseAddress = new Uri("http://knowledge-mcp.test")
             });
-            await using var adapter = CreateAdapter(httpClient, ["read_knowledge_file"]);
-            var tools = await adapter.GetApprovedToolsAsync(null, CancellationToken.None);
-            var framework = CreateFramework(new FunctionCallChatClient(
-                new Dictionary<string, object?> { ["relativePath"] = "changed.md" }));
+            await using var adapter = CreateAdapter(httpClient, ["list_knowledge_files", "removed_tool"]);
 
-            var exception = await Assert.ThrowsAsync<McpDependencyException>(() => framework.SelectMcpToolAsync(
-                "Knowledge File MCP",
-                "Read the file.",
-                tools,
-                new Dictionary<string, object?> { ["relativePath"] = "approved.md" },
-                CancellationToken.None));
+            var tools = await adapter.GetApprovedToolNamesAsync(["list_knowledge_files"], CancellationToken.None);
+            var result = await adapter.CallApprovedToolAsync("list_knowledge_files", null, CancellationToken.None);
 
-            Assert.Equal(McpDependencyFailureKind.InvalidResponse, exception.FailureKind);
+            Assert.Equal("list_knowledge_files", Assert.Single(tools));
+            Assert.NotNull(result.Deserialize<string[]>());
         }
         finally
         {
@@ -200,7 +172,7 @@ public sealed class McpToolAdapterTests
     }
 
     [Fact]
-    public async Task ToolSelectionPropagatesCallerCancellation()
+    public async Task AdapterCallPropagatesCallerCancellation()
     {
         var root = CreateKnowledgeRoot();
         try
@@ -211,21 +183,26 @@ public sealed class McpToolAdapterTests
                 BaseAddress = new Uri("http://knowledge-mcp.test")
             });
             await using var adapter = CreateAdapter(httpClient, ["list_knowledge_files"]);
-            var tools = await adapter.GetApprovedToolsAsync(null, CancellationToken.None);
-            var framework = CreateFramework(new CancellingChatClient());
-            using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
 
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => framework.SelectMcpToolAsync(
-                "Knowledge File MCP",
-                "List files.",
-                tools,
-                new Dictionary<string, object?>(),
-                cancellation.Token));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                adapter.CallApprovedToolAsync("list_knowledge_files", null, cancellation.Token));
         }
         finally
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public void AdapterPortDoesNotExposeMcpSdkTypes()
+    {
+        var exposedTypes = typeof(IMcpToolAdapter).GetMethods()
+            .SelectMany(method => method.GetParameters().Select(parameter => parameter.ParameterType).Append(method.ReturnType))
+            .Select(type => type.FullName ?? string.Empty);
+
+        Assert.DoesNotContain(exposedTypes, name => name.StartsWith("ModelContextProtocol.", StringComparison.Ordinal));
     }
 
     private static McpToolAdapter CreateAdapter(HttpClient httpClient, IReadOnlyList<string> allowedTools) => new(
@@ -238,11 +215,6 @@ public sealed class McpToolAdapterTests
         new SingleHttpClientFactory(httpClient),
         NullLogger<McpToolAdapter>.Instance);
 
-    private static CfoAgentFramework CreateFramework(IChatClient chatClient) => new(
-        chatClient,
-        NullLoggerFactory.Instance,
-        new EmptyServiceProvider());
-
     private static string CreateKnowledgeRoot()
     {
         var root = Path.Combine(Path.GetTempPath(), $"cfo-generic-mcp-{Guid.NewGuid():N}");
@@ -253,11 +225,6 @@ public sealed class McpToolAdapterTests
     private sealed class SingleHttpClientFactory(HttpClient client) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => client;
-    }
-
-    private sealed class EmptyServiceProvider : IServiceProvider
-    {
-        public object? GetService(Type serviceType) => null;
     }
 
     private sealed class RecordingDelegatingHandler(HttpMessageHandler innerHandler) : DelegatingHandler(innerHandler)
@@ -280,54 +247,6 @@ public sealed class McpToolAdapterTests
             }
 
             return await base.SendAsync(request, cancellationToken);
-        }
-    }
-
-    private sealed class FunctionCallChatClient(IDictionary<string, object?> arguments) : IChatClient
-    {
-        public Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-        {
-            var tool = Assert.Single(options?.Tools?.OfType<AIFunctionDeclaration>() ?? []);
-            return Task.FromResult(new ChatResponse(new ChatMessage(
-                ChatRole.Assistant,
-                [new FunctionCallContent("test-call", tool.Name, arguments)])));
-        }
-
-        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
-
-        public void Dispose()
-        {
-        }
-    }
-
-    private sealed class CancellingChatClient : IChatClient
-    {
-        public async Task<ChatResponse> GetResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default)
-        {
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            throw new InvalidOperationException("Unreachable after cancellation.");
-        }
-
-        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
-            IEnumerable<ChatMessage> messages,
-            ChatOptions? options = null,
-            CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-        public object? GetService(Type serviceType, object? serviceKey = null) => null;
-
-        public void Dispose()
-        {
         }
     }
 

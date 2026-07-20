@@ -7,7 +7,7 @@ public enum OllamaFailureKind
     InvalidResponse
 }
 
-public sealed class OllamaProviderException : Exception
+public sealed class OllamaProviderException : LlmDependencyException
 {
     public OllamaProviderException(OllamaFailureKind failureKind)
         : base(GetSafeMessage(failureKind))

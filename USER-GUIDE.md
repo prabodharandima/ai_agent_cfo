@@ -136,6 +136,49 @@ docker compose up -d
 
 Do not use `docker compose down -v` as part of a normal redeploy. It removes the PostgreSQL and ChromaDB volumes. After deploying, verify health with the next section before using the UI.
 
+### 5.1 Fresh deployment: remove old containers, images, and data
+
+Use this procedure when you want a completely clean local deployment: remove this application's existing containers, Compose networks, service images, PostgreSQL data, ChromaDB data, and pgAdmin preferences, then rebuild and reseed everything.
+
+> Warning: this deletes the local Finance PostgreSQL database, the ChromaDB index, and pgAdmin's saved server registrations for this Compose project. It does not delete repository files such as `.env` or `data/knowledge`. It is intentionally scoped to this Compose project; do **not** use `docker system prune -a` because that can remove Docker resources used by other projects.
+
+1. Confirm that `.env` contains the values you want for the new deployment. In particular, review the database credentials, port values, `FINANCE_DEMO_DATE`, and optional Ollama settings.
+
+2. Stop and remove every container, network, named volume, and service image managed by this Compose file:
+
+   ```powershell
+   docker compose down --volumes --remove-orphans --rmi all
+   ```
+
+   `--volumes` removes the `postgres_data`, `chroma_data`, and `pgadmin_data` named volumes. `--rmi all` removes the API, MCP, frontend, PostgreSQL, ChromaDB, and pgAdmin images used by this Compose project. Docker will rebuild or pull them during the next step.
+
+3. Confirm that this Compose project no longer has containers:
+
+   ```powershell
+   docker compose ps --all
+   ```
+
+   No services should be listed. `docker image ls` may still show images used by other projects; leave those alone.
+
+4. Build the latest repository code without using stale Docker build layers, then start the complete deployment:
+
+   ```powershell
+   docker compose build --pull --no-cache
+   docker compose up -d --force-recreate
+   ```
+
+   The first command rebuilds the API, both MCP servers, and frontend from the current working tree while pulling current base images. The second starts PostgreSQL, ChromaDB, pgAdmin, both MCP servers, the API, and frontend. It also runs the one-shot `finance-db-init` migration/seed service and `rag-init` ingestion service against the empty volumes.
+
+5. Wait for startup to complete, then verify service state and the reseed/ingestion jobs:
+
+   ```powershell
+   docker compose ps --all
+   docker compose logs --no-color finance-db-init
+   docker compose logs --no-color rag-init
+   ```
+
+   `postgres`, `finance-mcp`, `knowledge-mcp`, `chromadb`, `api`, and `frontend` must become healthy. `finance-db-init` and `rag-init` must finish as `Exited (0)`. Continue with [Verify the containers](#6-verify-the-containers) and [Use the application](#9-use-the-application) for health and manual-prompt checks.
+
 ## 6. Verify the containers
 
 Run:

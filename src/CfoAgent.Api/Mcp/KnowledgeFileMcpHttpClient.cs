@@ -7,13 +7,14 @@ public sealed class KnowledgeFileMcpHttpClient(
     [FromKeyedServices(McpToolAdapter.KnowledgeFilesKey)] IMcpToolAdapter toolAdapter) : IKnowledgeFileMcpRemoteClient
 {
     private const string DependencyName = "Knowledge File MCP";
+    private static readonly string[] RequiredTools = ["list_knowledge_files", "read_knowledge_file"];
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public async Task<IReadOnlyList<string>> DiscoverToolsAsync(CancellationToken cancellationToken) =>
-        (await toolAdapter.GetApprovedToolsAsync(null, cancellationToken))
-            .Select(tool => tool.Name)
-            .OrderBy(name => name, StringComparer.Ordinal)
-            .ToArray();
+    public async Task<IReadOnlyList<string>> DiscoverToolsAsync(CancellationToken cancellationToken)
+    {
+        var tools = await toolAdapter.GetApprovedToolNamesAsync(RequiredTools, cancellationToken);
+        return tools.OrderBy(name => name, StringComparer.Ordinal).ToArray();
+    }
 
     public async Task<IReadOnlyList<string>> ListFilesAsync(CancellationToken cancellationToken)
     {

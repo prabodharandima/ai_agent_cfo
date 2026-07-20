@@ -56,32 +56,17 @@ public static class ChatEndpoints
             : request.ConversationId.Trim();
         var logger = loggerFactory.CreateLogger("CfoAgent.Api.Features.Chat");
 
-        try
-        {
-            logger.LogInformation(
-                "Processing CFO chat request. ConversationIdProvided: {ConversationIdProvided}; MessageLength: {MessageLength}",
-                !string.IsNullOrWhiteSpace(request.ConversationId),
-                request.Message!.Length);
+        logger.LogInformation(
+            "Processing CFO chat request. ConversationIdProvided: {ConversationIdProvided}; MessageLength: {MessageLength}",
+            !string.IsNullOrWhiteSpace(request.ConversationId),
+            request.Message!.Length);
 
-            var result = await orchestrator.HandleAsync(
-                new AgentRequest(request.Message, conversationId),
-                httpContext.RequestAborted);
-            var model = new ChatModel(aiOptions.Value.Provider, aiOptions.Value.Model);
+        var result = await orchestrator.HandleAsync(
+            new AgentRequest(request.Message),
+            httpContext.RequestAborted);
+        var model = new ChatModel(aiOptions.Value.Provider, aiOptions.Value.Model);
 
-            return TypedResults.Ok(ChatResponse.FromAgentResult(result, conversationId, model));
-        }
-        catch (OperationCanceledException) when (httpContext.RequestAborted.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (InvalidOperationException)
-        {
-            logger.LogWarning("CFO chat request could not be completed. ConversationId: {ConversationId}", conversationId);
-            return TypedResults.Problem(
-                statusCode: StatusCodes.Status503ServiceUnavailable,
-                title: "CFO assistant is temporarily unavailable.",
-                type: "https://httpstatuses.com/503");
-        }
+        return TypedResults.Ok(ChatResponse.FromAgentResult(result, conversationId, model));
     }
 
     private static Dictionary<string, string[]> Validate(ChatRequest? request)
