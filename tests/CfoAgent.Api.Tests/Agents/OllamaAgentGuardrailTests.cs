@@ -50,10 +50,10 @@ public sealed class OllamaAgentGuardrailTests
             Assert.Equal(scenario.Type, result.ResponseType);
             Assert.NotNull(result.StructuredData);
             Assert.NotEmpty(result.Answer);
-            Assert.Equal(callCountBefore + 2, fakeClient.Prompts.Count);
+            Assert.Equal(callCountBefore + (scenario.Type == AgentResponseType.SalesSummary ? 3 : 2), fakeClient.Prompts.Count);
         }
 
-        Assert.Equal(10, fakeClient.Prompts.Count);
+        Assert.Equal(11, fakeClient.Prompts.Count);
         Assert.DoesNotContain(fakeClient.Prompts, prompt => prompt.Contains("ORCHESTRATE", StringComparison.Ordinal));
         Assert.All(fakeClient.RequestOptions, options => Assert.True(options?.Tools is null or { Count: 0 }));
         Assert.Equal(256, fakeClient.GetPayloadAfterMarker("RETRIEVED_CONTEXT:").Length);
@@ -209,14 +209,17 @@ public sealed class OllamaAgentGuardrailTests
             RequestOptions.Add(options);
 
             var isClassification = prompt.Contains("USER_REQUEST:", StringComparison.Ordinal);
-            if (!isClassification && FormattingFailure is not null)
+            var isDateRangeResolution = prompt.Contains("SALES_SUMMARY_PERIOD_REQUEST:", StringComparison.Ordinal);
+            if (!isClassification && !isDateRangeResolution && FormattingFailure is not null)
             {
                 throw FormattingFailure;
             }
 
             var text = isClassification
                 ? ClassificationResponse ?? Classify(GetPayload(prompt, "USER_REQUEST:"))
-                : FormattingResponse;
+                : isDateRangeResolution
+                    ? "{\"startDate\":\"2026-07-13\",\"endDate\":\"2026-07-15\"}"
+                    : FormattingResponse;
             return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, text))
             {
                 ModelId = "ollama-style-fake"

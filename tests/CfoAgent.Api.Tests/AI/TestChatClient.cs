@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 
@@ -81,6 +82,11 @@ internal sealed class TestChatClient : IChatClient
             return Task.FromResult(Classify(prompt));
         }
 
+        if (prompt.Contains("SALES_SUMMARY_PERIOD_REQUEST:", StringComparison.Ordinal))
+        {
+            return Task.FromResult(ResolveSalesSummaryDateRange(prompt));
+        }
+
         if (prompt.Contains("VERIFIED_DATA:", StringComparison.Ordinal))
         {
             return Task.FromResult($"Verified test response:\n{GetContentAfter(prompt, "VERIFIED_DATA:")}");
@@ -134,6 +140,35 @@ internal sealed class TestChatClient : IChatClient
 
         return "Unsupported";
     }
+
+    private static string ResolveSalesSummaryDateRange(string prompt)
+    {
+        const string currentDateMarker = "The current date is ";
+        var markerIndex = prompt.IndexOf(currentDateMarker, StringComparison.Ordinal);
+        var currentDate = DateOnly.ParseExact(
+            prompt.Substring(markerIndex + currentDateMarker.Length, 10),
+            "yyyy-MM-dd",
+            System.Globalization.CultureInfo.InvariantCulture);
+        var message = GetContentAfter(prompt, "SALES_SUMMARY_PERIOD_REQUEST:").ToUpperInvariant();
+
+        var (startDate, endDate) = message.Contains("LAST WEEK", StringComparison.Ordinal)
+            ? (StartOfWeek(currentDate).AddDays(-7), StartOfWeek(currentDate).AddDays(-1))
+            : message.Contains("SINCE YESTERDAY", StringComparison.Ordinal)
+                ? (currentDate.AddDays(-1), currentDate)
+                : message.Contains("YESTERDAY", StringComparison.Ordinal)
+                    ? (currentDate.AddDays(-1), currentDate.AddDays(-1))
+                    : message.Contains("TODAY", StringComparison.Ordinal)
+                        ? (currentDate, currentDate)
+                        : (StartOfWeek(currentDate), currentDate);
+
+        return JsonSerializer.Serialize(new
+        {
+            startDate = startDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
+            endDate = endDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)
+        });
+    }
+
+    private static DateOnly StartOfWeek(DateOnly date) => date.AddDays(-((int)date.DayOfWeek + 6) % 7);
 
     private static string GetContentAfter(string value, string marker)
     {

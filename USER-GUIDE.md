@@ -345,7 +345,7 @@ $env:AI__Ollama__Model = 'llama3.2:3b'
 $env:AI__Ollama__BaseUrl = 'http://localhost:11434'
 ```
 
-For Docker Compose, retain `AI_PROVIDER=Ollama` and `OLLAMA_MODEL=llama3.2:3b` in `.env`, then run `docker compose up -d --force-recreate api`. Containers reach host Ollama through `host.docker.internal`. Ollama is never asked to calculate financial values or replace ChromaDB retrieval. When the application supplies a bounded approved MCP tool set for a Finance operation, Ollama may return one function call from that set; the API still validates the selected tool and canonical deterministic arguments before invocation.
+For Docker Compose, retain `AI_PROVIDER=Ollama` and `OLLAMA_MODEL=llama3.2:3b` in `.env`, then run `docker compose up -d --force-recreate api`. Containers reach host Ollama through `host.docker.internal`. Ollama is never asked to calculate financial values or replace ChromaDB retrieval. For sales summaries, it proposes an ISO start/end range from the user's wording; the API validates the dates before it calls Finance MCP.
 
 ## 13. Stop or reset the application
 

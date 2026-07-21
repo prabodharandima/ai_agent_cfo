@@ -35,9 +35,11 @@ public sealed class AgentContractsTests
             CancellationToken.None);
 
         Assert.Equal("Verified presentation.", result.Answer);
-        Assert.Equal(AgentDefinitions.SalesAnalysis.SystemInstructions, Assert.Single(client.Options).Instructions);
-        Assert.True(Assert.Single(client.Options).Tools is null or { Count: 0 });
-        Assert.Contains("VERIFIED_DATA:", Assert.Single(client.Prompts), StringComparison.Ordinal);
+        Assert.Equal(2, client.Options.Count);
+        Assert.All(client.Options, options => Assert.Equal(AgentDefinitions.SalesAnalysis.SystemInstructions, options.Instructions));
+        Assert.All(client.Options, options => Assert.True(options.Tools is null or { Count: 0 }));
+        Assert.Contains(client.Prompts, prompt => prompt.Contains("SALES_SUMMARY_PERIOD_REQUEST:", StringComparison.Ordinal));
+        Assert.Contains(client.Prompts, prompt => prompt.Contains("VERIFIED_DATA:", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -91,9 +93,13 @@ public sealed class AgentContractsTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Prompts.Add(string.Join('\n', messages.Select(message => message.Text ?? string.Empty)));
+            var prompt = string.Join('\n', messages.Select(message => message.Text ?? string.Empty));
+            Prompts.Add(prompt);
             Options.Add(Assert.IsType<ChatOptions>(options));
-            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, "Verified presentation.")));
+            var response = prompt.Contains("SALES_SUMMARY_PERIOD_REQUEST:", StringComparison.Ordinal)
+                ? "{\"startDate\":\"2026-07-13\",\"endDate\":\"2026-07-15\"}"
+                : "Verified presentation.";
+            return Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, response)));
         }
 
         public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(

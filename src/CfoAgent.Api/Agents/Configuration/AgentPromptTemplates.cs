@@ -33,6 +33,26 @@ public static class AgentPromptTemplates
 
     public static string ForSalesSummary(SalesSummary summary) => Create(summary);
 
+    public static string ForSalesSummaryDateRange(string message, DateOnly currentDate) => $$"""
+        Interpret the user's requested inclusive sales-summary date range.
+        The current date is {{currentDate:yyyy-MM-dd}}.
+
+        Return exactly one JSON object and no Markdown, prose, calculation, or explanation:
+        {"startDate":"YYYY-MM-DD","endDate":"YYYY-MM-DD"}
+
+        Use these rules:
+        - "today" means the current date only.
+        - "yesterday" means the day before the current date only.
+        - "since yesterday" means yesterday through the current date.
+        - "this week" means Monday through the current date.
+        - "last week" means the previous Monday through Sunday.
+        - An explicit date means that date only unless the user asks for a range.
+        - Do not return dates after the current date.
+
+        SALES_SUMMARY_PERIOD_REQUEST:
+        {{message}}
+        """;
+
     public static string ForSalesComparison(WeeklySalesComparison comparison) => Create(comparison);
 
     public static string ForTopProducts(TopProductsResult topProducts) => Create(topProducts);

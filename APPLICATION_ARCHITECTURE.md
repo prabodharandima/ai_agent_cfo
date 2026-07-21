@@ -40,7 +40,7 @@ the following happens:
 9. The sales agent gives the verified comparison to Ollama and asks it only to explain the data in concise language.
 10. The API returns both the prose answer and the authoritative structured comparison.
 
-The LLM does not choose the database, MCP server, MCP tool, dates, or financial calculations in this flow.
+The LLM does not choose the database, MCP server, MCP tool, or financial calculations in this flow. For a sales summary, it can propose a bounded start/end date range; C# validates the ISO dates, their ordering, and that the end date is not in the future before Finance MCP is called.
 
 ## 3. Main building blocks
 
@@ -225,27 +225,29 @@ flowchart TD
     E -->|Mixed| I[Forecasting plus Knowledge]
     E -->|Unsupported| U[Return scoped unsupported result]
 
-    F --> J[6. Identify Finance MCP operation]
+    F --> DatePrompt[6. Ask LLM for JSON start/end dates]
+    DatePrompt --> DateValidation[7. Validate or canonicalize standard relative periods in C#]
+    DateValidation --> J[8. Identify fixed Finance MCP operation]
     G --> J
     H --> K[6. Identify ChromaDB retrieval]
     I --> J
     I --> K
 
-    J --> L[7. Discover and call approved MCP tool]
+    J --> L[9. Discover and call approved MCP tool]
     K --> M[7. Embed question and query ChromaDB]
 
-    L --> N[8. Map finance result or calculate forecast]
+    L --> N[10. Map finance result or calculate forecast]
     M --> O[8. Filter chunks and build bounded context]
-    N --> P[9. LLM explains verified values]
+    N --> P[11. LLM explains verified values]
     O --> Q[9. LLM answers from retrieved text]
     P --> R[AgentResultComposer]
     Q --> R
-    U --> S[10. Map ChatResponse]
+    U --> S[12. Map ChatResponse]
     R --> S
     S --> T[Return JSON response]
 ```
 
-The LLM is used twice conceptually: once for bounded intent classification and once by the selected specialist to phrase verified information. There is no extra final LLM composition call.
+The LLM is used twice for most requests: once for bounded intent classification and once by the selected specialist to phrase verified information. Sales summaries add one bounded date-range interpretation call that returns only JSON. C# canonicalizes standard relative phrases such as "this week" and "last week" and validates other ranges before querying Finance MCP. There is no extra final LLM composition call.
 
 ## 7. How the system decides what to do
 
@@ -256,7 +258,7 @@ The four decisions below are deliberately separate. Keeping them separate preven
 | Intent | `CfoOrchestratorAgent` with a bounded `IChatClient` answer and keyword fallback | `Forecast` | Which database or tool to call |
 | Specialist agent | Explicit C# switch in the orchestrator | `ForecastingAgent` | Whether to invent a new agent or workflow |
 | MCP server | The selected agent's injected port | Finance MCP for Sales/Forecasting | Which endpoint to contact |
-| MCP tool and arguments | Typed client method plus the MCP allow-list | `get_historical_sales` with five deterministic years | Tool name, dates, limits, or financial values |
+| MCP tool and arguments | Typed client method plus the MCP allow-list | `get_historical_sales` with five deterministic years | Tool name, limits, or financial values. Sales-summary dates are an exception: the LLM proposes them, then C# validates and canonicalizes them. |
 
 ### 7.1 How intent is identified
 
@@ -319,6 +321,7 @@ What is fixed in application logic:
 
 | Typed method | Hard-coded MCP tool |
 |---|---|
+| `GetSalesSummaryAsync(SalesPeriod)` | `get_sales_summary` |
 | `GetCurrentWeekSummaryAsync` | `get_sales_summary` |
 | `GetWeekOverWeekComparisonAsync` | `compare_sales_periods` |
 | `GetCurrentMonthTopProductsAsync` | `get_top_products` |
@@ -327,7 +330,7 @@ What is fixed in application logic:
 | `KnowledgeFileMcpHttpClient.ListFilesAsync` | `list_knowledge_files` |
 | `KnowledgeFileMcpHttpClient.ReadFileAsync` | `read_knowledge_file` |
 
-Discovered tools are not passed to the LLM in the current agent flow. The LLM does not choose the final tool. It also does not create Finance tool arguments.
+Discovered tools are not passed to the LLM in the current agent flow. The LLM does not choose the final tool. The only Finance-argument exception is Sales Summary: it proposes `startDate` and `endDate` as JSON. `SalesAnalysisAgent` canonicalizes standard relative phrases such as "this week" and validates other ranges for ISO format, date ordering, and the non-future boundary before `FinanceMcpClient` sends canonical arguments to `get_sales_summary`.
 
 The generic adapter can call another discovered and approved tool by name without adding an adapter method, but that alone does not make the tool available to a chat scenario. A business route or typed operation would still have to request it.
 
@@ -346,7 +349,50 @@ The prompt "What does gross margin mean?" is not guaranteed to reach Knowledge w
 
 ## 8. Detailed sequence diagrams
 
-### 8.1 Finance request: top products
+### 8.1 Finance request: sales summary
+
+Example: "Give me the sales summary since yesterday."
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant HTTP as ChatEndpoints
+    participant CFO as CfoOrchestratorAgent
+    participant Sales as SalesAnalysisAgent
+    participant LLM as IChatClient
+    participant Client as FinanceMcpClient
+    participant Adapter as McpToolAdapter
+    participant FMCP as Finance MCP
+    participant PG as PostgreSQL
+    participant Compose as AgentResultComposer
+
+    User->>HTTP: POST /api/chat
+    HTTP->>CFO: HandleAsync(message, RequestAborted)
+    CFO->>LLM: Classify bounded intent
+    LLM-->>CFO: SalesSummary
+    CFO->>Sales: GetWeeklySummaryAsync
+    Sales->>LLM: Request JSON startDate and endDate with current date
+    LLM-->>Sales: {startDate, endDate}
+    Sales->>Sales: Canonicalize standard relative periods or validate ISO dates
+    Sales->>Client: GetSalesSummaryAsync(validated period)
+    Client->>Adapter: CallApprovedToolAsync(get_sales_summary, canonical args)
+    Adapter->>FMCP: Initialize and tools/list if not cached
+    Adapter->>FMCP: tools/call get_sales_summary
+    FMCP->>PG: Read and aggregate sales
+    PG-->>FMCP: Rows
+    FMCP-->>Sales: Typed SalesSummary
+    Sales->>LLM: Explain verified result only
+    LLM-->>Sales: Executive prose
+    Sales-->>CFO: AgentResult with structured data
+    CFO->>Compose: Compose one result
+    Compose-->>CFO: Same result
+    CFO-->>HTTP: AgentResult
+    HTTP-->>User: ChatResponse JSON
+```
+
+The LLM interprets the user's time wording only. It does not calculate financial values, select the MCP server/tool, or bypass the C# validation.
+
+### 8.2 Finance request: top products
 
 Example: "Show me this month's top products."
 
@@ -392,7 +438,7 @@ sequenceDiagram
     UI-->>User: Answer and values
 ```
 
-### 8.2 Knowledge request
+### 8.3 Knowledge request
 
 Tested example: "What is the annual sales target and what assumptions were used?"
 
@@ -430,7 +476,7 @@ sequenceDiagram
     API-->>User: ChatResponse with sources
 ```
 
-### 8.3 Mixed request
+### 8.4 Mixed request
 
 The current Mixed route is specifically Forecast plus Knowledge. A tested example is:
 
@@ -476,7 +522,7 @@ sequenceDiagram
     API-->>User: One response with both result sections
 ```
 
-### 8.4 Finance MCP failure
+### 8.5 Finance MCP failure
 
 ```mermaid
 sequenceDiagram
@@ -802,7 +848,8 @@ Ingestion catches non-cancellation errors per document and records the source pa
 Information sent to the selected LLM is bounded by operation:
 
 - classification: the user's message inside the allowed-intent prompt;
-- Sales: verified serialized summary/comparison/product data;
+- Sales Summary date interpretation: the user's message and the `TimeProvider` current date; the response must be JSON with `startDate` and `endDate`;
+- Sales result presentation: verified serialized summary/comparison/product data;
 - Forecast: completed deterministic forecast data and assumptions;
 - Knowledge: bounded retrieved Chroma text and source headers.
 
@@ -832,6 +879,7 @@ flowchart TD
 | ChromaDB unavailable | `ChromaDependencyException` through `VectorSearchDependencyException`, HTTP 503 |
 | No relevant knowledge | Successful Knowledge result with a fixed insufficient-knowledge answer, not 503 |
 | AI provider unavailable or invalid | Sanitized provider HTTP 503 |
+| Invalid Sales Summary date-range JSON | C# prevents the Finance MCP call; the current `InvalidOperationException` mapping returns a sanitized HTTP 503 |
 | AI provider timeout | HTTP 504 |
 | Caller cancellation | Propagated; not converted to fallback or 503 |
 
@@ -941,7 +989,7 @@ PostgreSQL, ChromaDB, and pgAdmin use named volumes. Knowledge files use a read-
 
 | Example | Detected intent | Selected agent | External data | Tool or search | Composition |
 |---|---|---|---|---|---|
-| "Give me this week's sales summary." | Sales Summary | Sales Analysis | Finance MCP -> PostgreSQL | `get_sales_summary` | Single result returned unchanged |
+| "Give me this week's sales summary." | Sales Summary | Sales Analysis | LLM date interpretation, then Finance MCP -> PostgreSQL | validated `startDate`/`endDate`, then `get_sales_summary` | Single result returned unchanged |
 | "Compare this week's sales with last week." | Sales Comparison | Sales Analysis | Finance MCP -> PostgreSQL | `compare_sales_periods` | Single result returned unchanged |
 | "Show me the top five products this month." | Top Products | Sales Analysis | Finance MCP -> PostgreSQL | `get_top_products` | Single result returned unchanged |
 | "Give me the sales forecast for the next five years." | Forecast | Forecasting | Finance MCP historical totals | `get_historical_sales`, then C# regression | Single result with forecasts and assumptions |
