@@ -14,7 +14,7 @@ public static class AgentPromptTemplates
         SalesSummary, SalesComparison, TopProducts, Forecast, Knowledge, Mixed, or Unsupported.
 
         Route requests using these rules:
-        - SalesSummary: current or weekly sales summaries.
+        - SalesSummary: sales summaries for today, yesterday, a specified date, or the current week.
         - SalesComparison: comparisons between sales periods.
         - TopProducts: product rankings or top products.
         - Forecast: sales forecasts without a request for document-based assumptions or risks.

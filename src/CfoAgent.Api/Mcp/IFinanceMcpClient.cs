@@ -4,6 +4,9 @@ namespace CfoAgent.Api.Mcp;
 
 public interface IFinanceMcpClient
 {
+    Task<SalesSummary> GetSalesSummaryAsync(SalesPeriod period, CancellationToken cancellationToken) =>
+        GetCurrentWeekSummaryAsync(cancellationToken);
+
     Task<SalesSummary> GetCurrentWeekSummaryAsync(CancellationToken cancellationToken);
 
     Task<WeeklySalesComparison> GetWeekOverWeekComparisonAsync(CancellationToken cancellationToken);

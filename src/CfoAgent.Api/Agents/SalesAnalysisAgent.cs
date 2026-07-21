@@ -9,7 +9,8 @@ namespace CfoAgent.Api.Agents;
 
 public sealed class SalesAnalysisAgent(
     IChatClient chatClient,
-    IFinanceMcpClient financeMcpClient)
+    IFinanceMcpClient financeMcpClient,
+    TimeProvider? timeProvider = null)
 {
     public async Task<AgentResult> GetWeeklySummaryAsync(AgentRequest request, CancellationToken cancellationToken)
     {
@@ -17,7 +18,8 @@ public sealed class SalesAnalysisAgent(
 
         try
         {
-            var summary = await financeMcpClient.GetCurrentWeekSummaryAsync(cancellationToken);
+            var requestedPeriod = SalesSummaryPeriodResolver.Resolve(request.Message, DateOnly.FromDateTime((timeProvider ?? TimeProvider.System).GetLocalNow().DateTime));
+            var summary = await financeMcpClient.GetSalesSummaryAsync(requestedPeriod.Period, cancellationToken);
             var answer = await GetAnswerAsync(AgentPromptTemplates.ForSalesSummary(summary), cancellationToken);
 
             return new AgentResult(
@@ -28,7 +30,7 @@ public sealed class SalesAnalysisAgent(
                 Array.Empty<AgentSource>(),
                 Array.Empty<string>(),
                 summary.Warnings,
-                ToDataPeriod(summary.Period, "Current week"));
+                ToDataPeriod(summary.Period, requestedPeriod.Label));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -44,7 +46,7 @@ public sealed class SalesAnalysisAgent(
         }
         catch (Exception exception)
         {
-            throw new InvalidOperationException("The sales analysis agent could not produce a weekly summary.", exception);
+            throw new InvalidOperationException("The sales analysis agent could not produce a sales summary.", exception);
         }
     }
 

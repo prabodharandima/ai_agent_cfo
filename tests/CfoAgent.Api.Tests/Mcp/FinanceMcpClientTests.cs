@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CfoAgent.Api.Features.Sales;
 using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Tests.Finance;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -49,6 +50,22 @@ public sealed class FinanceMcpClientTests
         await client.GetCurrentWeekSummaryAsync(CancellationToken.None);
 
         AssertCall(adapter.Calls.Single(), "get_sales_summary", ("startDate", "2026-07-20"), ("endDate", "2026-07-20"));
+    }
+
+    [Fact]
+    public async Task SalesSummaryForAnExplicitPeriodUsesCanonicalDateArguments()
+    {
+        var adapter = new RecordingToolAdapter();
+        var client = new FinanceMcpClient(
+            adapter,
+            new FixedTimeProvider(new DateOnly(2026, 7, 15)),
+            NullLogger<FinanceMcpClient>.Instance);
+
+        await client.GetSalesSummaryAsync(
+            new SalesPeriod(new DateOnly(2026, 6, 10), new DateOnly(2026, 6, 10)),
+            CancellationToken.None);
+
+        AssertCall(adapter.Calls.Single(), "get_sales_summary", ("startDate", "2026-06-10"), ("endDate", "2026-06-10"));
     }
 
     private static void AssertCall(
