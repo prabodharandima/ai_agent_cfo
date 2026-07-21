@@ -126,7 +126,7 @@ public sealed class AgentMcpWiringTests
     }
 
     [Fact]
-    public async Task CallerCancellationIsPropagatedWithoutFinanceFallback()
+    public async Task CallerCancellationIsPropagatedBeforeFinanceMcpIsCalled()
     {
         var mcp = new StubFinanceMcpClient
         {
@@ -144,7 +144,7 @@ public sealed class AgentMcpWiringTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
             agent.GetWeeklySummaryAsync(new AgentRequest("Show this week's sales."), cancellation.Token));
 
-        Assert.Equal(1, mcp.SummaryCalls);
+        Assert.Equal(0, mcp.SummaryCalls);
     }
 
     [Fact]

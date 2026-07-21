@@ -18,12 +18,24 @@ public sealed class FinanceMcpClient(
     public async Task<SalesSummary> GetCurrentWeekSummaryAsync(CancellationToken cancellationToken)
     {
         var currentDate = GetCurrentDate();
+        return await GetSalesSummaryAsync(new SalesPeriod(StartOfWeek(currentDate), currentDate), cancellationToken);
+    }
+
+    public async Task<SalesSummary> GetSalesSummaryAsync(SalesPeriod period, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(period);
+
+        if (period.EndDate < period.StartDate)
+        {
+            throw new ArgumentException("The sales summary end date must not be earlier than the start date.", nameof(period));
+        }
+
         var result = await CallAndMapAsync<McpSalesSummary>(
             "get_sales_summary",
             new Dictionary<string, object?>
             {
-                ["startDate"] = FormatDate(StartOfWeek(currentDate)),
-                ["endDate"] = FormatDate(currentDate)
+                ["startDate"] = FormatDate(period.StartDate),
+                ["endDate"] = FormatDate(period.EndDate)
             },
             cancellationToken);
 
