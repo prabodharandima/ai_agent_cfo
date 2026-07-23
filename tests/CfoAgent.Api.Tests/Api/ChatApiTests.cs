@@ -4,7 +4,9 @@ using System.Text;
 using System.Text.Json;
 using CfoAgent.Api.AI;
 using CfoAgent.Api.AI.Ollama;
+using CfoAgent.Api.Agents.Contracts;
 using CfoAgent.Api.Configuration;
+using CfoAgent.Api.Features.Chat;
 using CfoAgent.Api.Features.Sales;
 using CfoAgent.Api.Health;
 using CfoAgent.Api.Mcp;
@@ -124,6 +126,42 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         Assert.Equal("cleanup-contract-001", document.RootElement.GetProperty("conversationId").GetString());
+    }
+
+    [Fact]
+    public async Task PostChat_RetainsMetadataForTheSameConversationId()
+    {
+        using var client = _factory.CreateClient();
+
+        await client.PostAsJsonAsync(
+            "/api/chat",
+            new { conversationId = "maf-session-continuity", message = "Give me the sales summary of this week." });
+        await client.PostAsJsonAsync(
+            "/api/chat",
+            new { conversationId = "maf-session-continuity", message = "Give me the sales forecast for the next five years." });
+
+        var store = _factory.Services.GetRequiredService<InMemoryAgentSessionStore>();
+        Assert.Equal(
+            [AgentResponseType.SalesSummary, AgentResponseType.Forecast],
+            store.GetContext("maf-session-continuity").Turns.Select(turn => turn.ResponseType));
+    }
+
+    [Fact]
+    public async Task PostChat_GeneratesIsolatedSessionsWhenConversationIdIsMissing()
+    {
+        using var client = _factory.CreateClient();
+
+        using var first = await client.PostAsJsonAsync("/api/chat", new { message = "Give me the sales summary of this week." });
+        using var second = await client.PostAsJsonAsync("/api/chat", new { message = "Give me the sales forecast for the next five years." });
+        using var firstDocument = JsonDocument.Parse(await first.Content.ReadAsStringAsync());
+        using var secondDocument = JsonDocument.Parse(await second.Content.ReadAsStringAsync());
+        var firstId = firstDocument.RootElement.GetProperty("conversationId").GetString()!;
+        var secondId = secondDocument.RootElement.GetProperty("conversationId").GetString()!;
+
+        Assert.NotEqual(firstId, secondId);
+        var store = _factory.Services.GetRequiredService<InMemoryAgentSessionStore>();
+        Assert.Equal(AgentResponseType.SalesSummary, Assert.Single(store.GetContext(firstId).Turns).ResponseType);
+        Assert.Equal(AgentResponseType.Forecast, Assert.Single(store.GetContext(secondId).Turns).ResponseType);
     }
 
     [Theory]
@@ -273,6 +311,22 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
             "/api/chat/stream",
             new { message = "Give me the sales summary of this week." },
             cancellationSource.Token));
+    }
+
+    [Fact]
+    public async Task PostChat_DoesNotRecordCancelledRequests()
+    {
+        await using var factory = ChatApiFactory.CreateDelayed(TimeSpan.FromSeconds(5));
+        using var client = factory.CreateClient();
+        using var cancellationSource = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.PostAsJsonAsync(
+            "/api/chat",
+            new { conversationId = "maf-session-cancelled", message = "Give me the sales summary of this week." },
+            cancellationSource.Token));
+
+        var store = factory.Services.GetRequiredService<InMemoryAgentSessionStore>();
+        Assert.Empty(store.GetContext("maf-session-cancelled").Turns);
     }
 
     [Fact]

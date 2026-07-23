@@ -207,9 +207,15 @@ flowchart TB
 
 ### HTTP endpoint
 
-`ChatEndpoints` owns HTTP concerns only: request validation, conversation ID handling, cancellation source, and response mapping. It contains no agent-routing, MCP, ChromaDB, PostgreSQL, or Ollama-specific logic.
+`ChatEndpoints` owns HTTP concerns only: request validation, conversation ID handling, bounded session lookup/recording, cancellation source, and response mapping. It contains no agent-routing, MCP, ChromaDB, PostgreSQL, or Ollama-specific logic.
 
 On success, the public response contains the prose answer, a stable response type, the agent names, authoritative structured data when available, citations for knowledge answers, assumptions, warnings, the data period, and the selected provider/model. The endpoint maps these values; it does not calculate them.
+
+### Bounded agent sessions
+
+`InMemoryAgentSessionStore` uses the existing `conversationId` as its key. It follows the Microsoft Agent Framework session concept without delegating history storage to the model provider: each in-memory entry holds only the prior resolved response type and optional date period. `ChatEndpoints` supplies this compact context to `CfoOrchestratorAgent.ClassifyAsync` and records a turn only after a successful normal response or completed SSE response. It does not retain user prompts, answers, raw RAG chunks, MCP payloads, credentials, or authorization state.
+
+Sessions are isolated per conversation ID, expire after inactivity, retain only the configured number of most recent turns, and are removed when the API process restarts. They cannot authorize tools, alter MCP allow-lists, or change deterministic financial calculations.
 
 ### CFO orchestrator
 
@@ -909,6 +915,9 @@ The local and container defaults are intentionally different. Local `appsettings
 | `AI:Ollama:MaxOutputTokens` / `OLLAMA_MAX_OUTPUT_TOKENS` | Maximum completion size | `512` | Ollama request | 1 through 1,024 and below context length |
 | `AgentMiddleware:PromptInjectionCheckEnabled` / `AgentMiddleware__PromptInjectionCheckEnabled` | Enable deterministic prompt-risk checks | `true` | `AgentChatMiddleware` | When enabled, requires at least one phrase |
 | `AgentMiddleware:SuspiciousPromptPhrases` / `AgentMiddleware__SuspiciousPromptPhrases__0` | Phrases that cause a request to be blocked before the provider call | `ignore previous instructions` | `AgentChatMiddleware` | Nonblank and unique, case-insensitively |
+| `AgentSessions:MessageLimit` / `AgentSessions__MessageLimit` | Most recent resolved turns retained per in-memory conversation | `8` | `InMemoryAgentSessionStore` | 1 through 100 |
+| `AgentSessions:ExpirationMinutes` / `AgentSessions__ExpirationMinutes` | Sliding inactivity expiry for an in-memory conversation | `30` | `InMemoryAgentSessionStore` | 1 through 1,440 |
+| `AgentSessions:MaximumSessions` / `AgentSessions__MaximumSessions` | Maximum conversation entries in one API process | `1000` | `InMemoryAgentSessionStore` | 1 through 10,000 |
 | `Mcp:Finance:Enabled` | Enable required Finance MCP | `true` | Finance adapter/readiness | Finance readiness is unhealthy when false |
 | `Mcp:Finance:BaseUrl` / `FINANCE_MCP_BASE_URL` | Finance MCP service address | `http://finance-mcp:8080` | Finance keyed adapter | Absolute HTTP URL when enabled |
 | `Mcp:Finance:TimeoutSeconds` | Finance MCP timeout | `10` | Finance keyed adapter | Positive |
@@ -1060,7 +1069,7 @@ These limitations are visible in the current code:
 - Internal MCP and PostgreSQL services are unauthenticated. Docker network isolation is the current protection.
 - Ollama is a local host dependency and must have the configured model installed.
 - Knowledge local fallback is Development-only and explicitly disabled in containers.
-- Chat history is not persisted. The conversation ID is returned but no conversation store exists.
+- Conversation context is in memory only. It is bounded, expires after inactivity, stores only resolved response metadata/date periods, and disappears on API restart; it is not persistent chat history.
 - The ChromaDB and pgAdmin Compose images use `latest`, so exact image versions depend on pull time.
 
 ## 21. Glossary

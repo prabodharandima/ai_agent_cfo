@@ -26,7 +26,7 @@ The current Streamable HTTP clients use one minimal generic `McpToolAdapter` for
 
 ## Microsoft Agent Framework integration - Planned enhancement
 
-The Microsoft Agent Framework work is planned only. No Microsoft Agent Framework package, middleware, structured-output API, streaming endpoint, agent session, RAG context provider, or OpenTelemetry integration is part of the current implementation.
+Microsoft Agent Framework integration is in progress. The compatible package, bounded chat middleware, structured intent/date output, the optional SSE endpoint, and bounded in-memory session context are implemented. RAG context-provider integration, OpenTelemetry, and the final regression/documentation gate remain planned.
 
 The planned task order is recorded in `tasks/maf_agent_integration/README.md`:
 

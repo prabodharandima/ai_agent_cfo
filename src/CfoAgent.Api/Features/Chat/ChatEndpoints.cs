@@ -52,6 +52,7 @@ public static class ChatEndpoints
     private static async Task<Results<Ok<ChatResponse>, ValidationProblem, ProblemHttpResult>> HandleAsync(
         ChatRequest? request,
         CfoOrchestratorAgent orchestrator,
+        InMemoryAgentSessionStore sessionStore,
         AiProviderDescriptor aiProvider,
         ILoggerFactory loggerFactory,
         HttpContext httpContext)
@@ -73,8 +74,10 @@ public static class ChatEndpoints
             request.Message!.Length);
 
         var result = await orchestrator.HandleAsync(
-            new AgentRequest(request.Message),
+            new AgentRequest(request.Message!, sessionStore.GetContext(conversationId)),
             httpContext.RequestAborted);
+        httpContext.RequestAborted.ThrowIfCancellationRequested();
+        sessionStore.Record(conversationId, result);
         var model = new ChatModel(aiProvider.ProviderName, aiProvider.ModelName);
 
         return TypedResults.Ok(ChatResponse.FromAgentResult(result, conversationId, model));
@@ -83,6 +86,7 @@ public static class ChatEndpoints
     private static async Task HandleStreamAsync(
         ChatRequest? request,
         CfoOrchestratorAgent orchestrator,
+        InMemoryAgentSessionStore sessionStore,
         AiProviderDescriptor aiProvider,
         ILoggerFactory loggerFactory,
         HttpContext httpContext)
@@ -107,8 +111,8 @@ public static class ChatEndpoints
         try
         {
             await WriteEventAsync(httpContext.Response, "progress", new ChatStreamProgress("classifying"), cancellationToken);
-            var agentRequest = new AgentRequest(request.Message!);
-            var intent = await orchestrator.ClassifyAsync(agentRequest.Message, cancellationToken);
+            var agentRequest = new AgentRequest(request.Message!, sessionStore.GetContext(conversationId));
+            var intent = await orchestrator.ClassifyAsync(agentRequest, cancellationToken);
 
             await WriteEventAsync(httpContext.Response, "progress", new ChatStreamProgress("retrieving"), cancellationToken);
             var result = await orchestrator.HandleClassifiedAsync(agentRequest, intent, cancellationToken);
@@ -134,6 +138,8 @@ public static class ChatEndpoints
                     response.DataPeriod,
                     response.Model),
                 cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            sessionStore.Record(conversationId, result);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

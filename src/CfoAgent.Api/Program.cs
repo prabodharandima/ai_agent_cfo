@@ -77,6 +77,13 @@ builder.Services.AddOptions<AgentMiddlewareOptions>()
         "AgentMiddleware:SuspiciousPromptPhrases must not contain duplicates.")
     .ValidateOnStart();
 
+builder.Services.AddOptions<AgentSessionOptions>()
+    .BindConfiguration(AgentSessionOptions.SectionName)
+    .Validate(options => options.MessageLimit is > 0 and <= 100, "AgentSessions:MessageLimit must be between 1 and 100.")
+    .Validate(options => options.ExpirationMinutes is > 0 and <= 1_440, "AgentSessions:ExpirationMinutes must be between 1 and 1440.")
+    .Validate(options => options.MaximumSessions is > 0 and <= 10_000, "AgentSessions:MaximumSessions must be between 1 and 10000.")
+    .ValidateOnStart();
+
 builder.Services.AddOptions<McpOptions>()
     .BindConfiguration(McpOptions.SectionName)
     .Validate(options => options.Finance.TimeoutSeconds > 0, "Mcp:Finance:TimeoutSeconds must be greater than zero.")
@@ -97,6 +104,7 @@ builder.Services.AddOptions<FrontendOptions>()
 var frontendOptions = builder.Configuration.GetRequiredSection(FrontendOptions.SectionName).Get<FrontendOptions>()
     ?? throw new InvalidOperationException("Frontend configuration is required.");
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<InMemoryAgentSessionStore>();
 builder.Services.AddScoped<SalesForecastingService>();
 builder.Services.AddScoped<SalesAnalysisAgent>();
 builder.Services.AddScoped<ForecastingAgent>();

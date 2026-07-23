@@ -22,12 +22,16 @@ public sealed class CfoOrchestratorAgent(
     private static readonly JsonSerializerOptions StructuredOutputJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly ILogger<CfoOrchestratorAgent> _logger = logger ?? NullLogger<CfoOrchestratorAgent>.Instance;
 
-    public async Task<CfoIntent> ClassifyAsync(string message, CancellationToken cancellationToken = default)
+    public Task<CfoIntent> ClassifyAsync(string message, CancellationToken cancellationToken = default) =>
+        ClassifyAsync(new AgentRequest(message), cancellationToken);
+
+    public async Task<CfoIntent> ClassifyAsync(AgentRequest request, CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.Message);
 
         var response = await chatClient.GetResponseAsync(
-            [new ChatMessage(ChatRole.User, AgentPromptTemplates.ForClassification(message))],
+            [new ChatMessage(ChatRole.User, AgentPromptTemplates.ForClassification(request.Message, request.SessionContext))],
             new ChatOptions
             {
                 Instructions = AgentDefinitions.CfoOrchestrator.SystemInstructions,
@@ -40,7 +44,7 @@ public sealed class CfoOrchestratorAgent(
 
         return TryParseStructuredIntent(response.Text, out var intent) && intent != CfoIntent.Unsupported
             ? intent
-            : ClassifyDeterministically(message);
+            : ClassifyDeterministically(request.Message);
     }
 
     public async Task<AgentResult> HandleAsync(AgentRequest request, CancellationToken cancellationToken = default)
@@ -48,7 +52,7 @@ public sealed class CfoOrchestratorAgent(
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Message);
 
-        var intent = await ClassifyAsync(request.Message, cancellationToken);
+        var intent = await ClassifyAsync(request, cancellationToken);
         return await HandleClassifiedAsync(request, intent, cancellationToken);
     }
 
