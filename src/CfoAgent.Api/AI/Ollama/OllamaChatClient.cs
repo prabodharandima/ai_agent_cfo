@@ -102,11 +102,63 @@ public sealed class OllamaChatClient : IChatClient
         ChatOptions? options = null,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var response = await GetResponseAsync(messages, options, cancellationToken);
-        yield return new ChatResponseUpdate(ChatRole.Assistant, response.Text)
+        ArgumentNullException.ThrowIfNull(messages);
+
+        var requestOptions = CreateRequestOptions(options);
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(TimeSpan.FromSeconds(this.options.TimeoutSeconds));
+        var stopwatch = Stopwatch.StartNew();
+        await using var enumerator = transport
+            .GetStreamingResponseAsync(messages, requestOptions, timeoutSource.Token)
+            .GetAsyncEnumerator(timeoutSource.Token);
+
+        while (true)
         {
-            ModelId = response.ModelId
-        };
+            ChatResponseUpdate update;
+            try
+            {
+                if (!await enumerator.MoveNextAsync())
+                {
+                    break;
+                }
+
+                update = enumerator.Current;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                LogOutcome(stopwatch, "Cancelled", "CallerCancelled");
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                LogOutcome(stopwatch, "Failure", "Timeout");
+                throw new AiProviderException(provider.ProviderName, AiProviderFailureKind.Timeout);
+            }
+            catch (HttpRequestException)
+            {
+                LogOutcome(stopwatch, "Failure", "Unavailable");
+                throw new AiProviderException(provider.ProviderName, AiProviderFailureKind.Unavailable);
+            }
+            catch (JsonException)
+            {
+                LogOutcome(stopwatch, "Failure", "InvalidResponse");
+                throw new AiProviderException(provider.ProviderName, AiProviderFailureKind.InvalidResponse);
+            }
+            catch (ResponseError)
+            {
+                LogOutcome(stopwatch, "Failure", "Unavailable");
+                throw new AiProviderException(provider.ProviderName, AiProviderFailureKind.Unavailable);
+            }
+            catch (OllamaException)
+            {
+                LogOutcome(stopwatch, "Failure", "InvalidResponse");
+                throw new AiProviderException(provider.ProviderName, AiProviderFailureKind.InvalidResponse);
+            }
+
+            yield return update;
+        }
+
+        LogOutcome(stopwatch, "Success", "None");
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null)

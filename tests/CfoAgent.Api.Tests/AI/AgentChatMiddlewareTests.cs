@@ -116,6 +116,27 @@ public sealed class AgentChatMiddlewareTests
         Assert.Equal(1, innerClient.CallCount);
     }
 
+    [Fact]
+    public async Task Wrap_StreamsTheInnerUpdatesAndRedactsSensitiveOutput()
+    {
+        var logger = new RecordingLogger<AgentChatMiddleware>();
+        var middleware = CreateMiddleware(logger: logger);
+        using var innerClient = new RecordingChatClient("API_KEY=stream-secret");
+        using var client = middleware.Wrap(innerClient);
+        var updates = new List<ChatResponseUpdate>();
+
+        await foreach (var streamedUpdate in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "Use verified data only.")]))
+        {
+            updates.Add(streamedUpdate);
+        }
+
+        var update = Assert.Single(updates);
+        Assert.Equal("API_KEY=[REDACTED]", update.Text);
+        Assert.Equal(1, innerClient.CallCount);
+        Assert.True(Assert.IsType<bool>(Assert.Single(logger.Entries)["OutputRedacted"]));
+    }
+
     private static AgentChatMiddleware CreateMiddleware(
         bool promptInjectionCheckEnabled = true,
         RecordingLogger<AgentChatMiddleware>? logger = null)

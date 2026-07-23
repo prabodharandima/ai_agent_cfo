@@ -48,10 +48,21 @@ public sealed class CfoOrchestratorAgent(
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Message);
 
+        var intent = await ClassifyAsync(request.Message, cancellationToken);
+        return await HandleClassifiedAsync(request, intent, cancellationToken);
+    }
+
+    public async Task<AgentResult> HandleClassifiedAsync(
+        AgentRequest request,
+        CfoIntent intent,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.Message);
+
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var intent = await ClassifyAsync(request.Message, cancellationToken);
             _logger.LogInformation("CFO request routed. Intent: {Intent}", intent);
             var specialistResults = intent switch
             {

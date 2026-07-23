@@ -15,7 +15,8 @@ public sealed partial class AgentChatMiddleware(
 
     public IChatClient Wrap(IChatClient client) => client.AsBuilder()
         .Use((messages, chatOptions, innerClient, cancellationToken) =>
-            GetResponseAsync(messages, chatOptions, innerClient, cancellationToken), getStreamingResponseFunc: null)
+            GetResponseAsync(messages, chatOptions, innerClient, cancellationToken),
+            GetStreamingResponseAsync)
         .Build();
 
     private async Task<ChatResponse> GetResponseAsync(
@@ -63,6 +64,68 @@ public sealed partial class AgentChatMiddleware(
             LogOutcome(correlationId, metadata, requestMessages.Length, stopwatch, "Failure", wasRedacted: false);
             throw;
         }
+    }
+
+    private async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+        IEnumerable<ChatMessage> messages,
+        ChatOptions? chatOptions,
+        IChatClient innerClient,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+
+        var requestMessages = messages.ToArray();
+        cancellationToken.ThrowIfCancellationRequested();
+        var correlationId = httpContextAccessor.HttpContext?.TraceIdentifier
+            ?? Activity.Current?.TraceId.ToString()
+            ?? "none";
+        var metadata = GetMetadata(innerClient, chatOptions);
+
+        if (ContainsSuspiciousPrompt(requestMessages))
+        {
+            logger.LogWarning(
+                "Agent chat request blocked. CorrelationId: {CorrelationId}; Provider: {Provider}; Model: {Model}; MessageCount: {MessageCount}; Outcome: {Outcome}",
+                correlationId,
+                metadata.ProviderName,
+                metadata.DefaultModelId,
+                requestMessages.Length,
+                "Blocked");
+            throw new PromptInjectionRiskException();
+        }
+
+        var stopwatch = Stopwatch.StartNew();
+        var outputRedacted = false;
+        await using var enumerator = innerClient
+            .GetStreamingResponseAsync(requestMessages, chatOptions, cancellationToken)
+            .GetAsyncEnumerator(cancellationToken);
+
+        while (true)
+        {
+            ChatResponseUpdate update;
+            try
+            {
+                if (!await enumerator.MoveNextAsync())
+                {
+                    break;
+                }
+
+                update = enumerator.Current;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                LogOutcome(correlationId, metadata, requestMessages.Length, stopwatch, "Cancelled", wasRedacted: outputRedacted);
+                throw;
+            }
+            catch
+            {
+                LogOutcome(correlationId, metadata, requestMessages.Length, stopwatch, "Failure", wasRedacted: outputRedacted);
+                throw;
+            }
+
+            yield return RedactStreamingUpdate(update, ref outputRedacted);
+        }
+
+        LogOutcome(correlationId, metadata, requestMessages.Length, stopwatch, "Success", outputRedacted);
     }
 
     private bool ContainsSuspiciousPrompt(IReadOnlyList<ChatMessage> messages) =>
@@ -124,6 +187,26 @@ public sealed partial class AgentChatMiddleware(
 
         wasRedacted = true;
         return new TextContent(redacted);
+    }
+
+    private static ChatResponseUpdate RedactStreamingUpdate(ChatResponseUpdate update, ref bool wasRedacted)
+    {
+        if (string.IsNullOrWhiteSpace(update.Text))
+        {
+            return update;
+        }
+
+        var redacted = Redact(update.Text);
+        if (string.Equals(redacted, update.Text, StringComparison.Ordinal))
+        {
+            return update;
+        }
+
+        wasRedacted = true;
+        return new ChatResponseUpdate(update.Role, redacted)
+        {
+            ModelId = update.ModelId
+        };
     }
 
     private static string Redact(string value)

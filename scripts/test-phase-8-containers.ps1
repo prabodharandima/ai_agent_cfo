@@ -113,6 +113,33 @@ function Invoke-Chat {
   }
 }
 
+function Wait-ReadinessStatus {
+  param([int]$ExpectedStatusCode)
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    $response = $null
+    try {
+      $response = $script:httpClient.GetAsync('health/ready').GetAwaiter().GetResult()
+      if ([int]$response.StatusCode -eq $ExpectedStatusCode) {
+        return
+      }
+    }
+    catch [System.Net.Http.HttpRequestException] {
+      # The API may briefly refuse connections while its container restarts.
+    }
+    finally {
+      if ($null -ne $response) {
+        $response.Dispose()
+      }
+    }
+
+    Start-Sleep -Seconds 2
+  } while ((Get-Date) -lt $deadline)
+
+  throw "API readiness did not return HTTP $ExpectedStatusCode within $TimeoutSeconds seconds."
+}
+
 function Assert-SanitizedDependencyFailure {
   param([pscustomobject]$Response, [string]$Dependency)
 
@@ -145,7 +172,7 @@ function Assert-ContainerBoundaries {
   Assert-Condition (-not ($apiEnvironment -match '^ConnectionStrings__')) 'The API contains a database connection string.'
   Assert-Condition (-not ($apiEnvironment -match 'postgres')) 'The API contains a PostgreSQL endpoint.'
   Assert-Condition ($apiEnvironment -contains 'Mcp__KnowledgeFiles__UseLocalFallback=false') 'Knowledge local fallback is not disabled.'
-  Assert-Condition ($apiEnvironment -contains 'AI__BaseUrl=http://host.docker.internal:11434') 'Ollama is not routed through host.docker.internal.'
+  Assert-Condition ($apiEnvironment -contains 'AI__Ollama__BaseUrl=http://host.docker.internal:11434') 'Ollama is not routed through host.docker.internal.'
 
   $knowledge = (docker inspect (Get-ServiceContainerId 'knowledge-mcp') | ConvertFrom-Json)[0]
   $knowledgeMount = @($knowledge.Mounts | Where-Object { $_.Destination -eq '/knowledge' })
@@ -216,10 +243,10 @@ try {
   Write-Host 'Running real container-to-container API and MCP tests.'
   Invoke-Compose -Arguments @('--profile', 'integration', 'run', '--rm', '--no-deps', 'container-tests')
 
-  Write-Host 'Stopping Knowledge MCP and verifying controlled failure without local fallback.'
+  Write-Host 'Stopping Knowledge MCP and verifying the API readiness boundary.'
   Invoke-Compose -Arguments @('stop', 'knowledge-mcp')
-  $knowledgeFailure = Invoke-Chat 'What is the annual sales target and what assumptions were used?'
-  Assert-SanitizedDependencyFailure $knowledgeFailure 'Knowledge MCP'
+  Invoke-Compose -Arguments @('restart', 'api')
+  Wait-ReadinessStatus 503
   Restart-ApiAfterDependency 'knowledge-mcp'
 
   Write-Host 'Stopping Finance MCP and verifying sanitized 503 without a database fallback.'

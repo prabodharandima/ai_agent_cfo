@@ -81,7 +81,7 @@ The dotted Knowledge MCP line is intentional. It represents an available operati
 
 ### Receive and validate prompts
 
-`ChatEndpoints.MapChatEndpoints` maps `POST /api/chat`. `HandleAsync` rejects a missing, blank, or longer-than-4,000-character message. It preserves a supplied conversation ID or creates one. Source: `src/CfoAgent.Api/Features/Chat/ChatEndpoints.cs`.
+`ChatEndpoints.MapChatEndpoints` maps the default `POST /api/chat` JSON endpoint and the optional `POST /api/chat/stream` Server-Sent Events (SSE) endpoint. Both reject a missing, blank, or longer-than-4,000-character message and preserve a supplied conversation ID or create one. `POST /api/chat` remains unchanged and is the default for clients that want one JSON response. Source: `src/CfoAgent.Api/Features/Chat/ChatEndpoints.cs`.
 
 ### Classify the request
 
@@ -109,7 +109,7 @@ The selected specialist determines the dependency:
 
 ### Compose the final answer
 
-Each specialist creates an `AgentResult`. `AgentResultComposer` returns a single result unchanged or combines Forecast and Knowledge results once. `ChatResponse.FromAgentResult` maps the result to the public JSON contract.
+Each specialist creates an `AgentResult`. `AgentResultComposer` returns a single result unchanged or combines Forecast and Knowledge results once. `ChatResponse.FromAgentResult` maps the result to the public JSON contract. The SSE endpoint streams only the already-composed public answer text, then sends a metadata-only completion event; it does not stream raw model prompts, retrieved context, or MCP payloads.
 
 ### Return errors safely
 
@@ -117,7 +117,42 @@ Each specialist creates an `AgentResult`. `AgentResultComposer` returns a single
 
 ### Handle cancellation
 
-`ChatEndpoints.HandleAsync` passes `HttpContext.RequestAborted` through the orchestrator, specialists, MCP calls, vector search, and LLM calls. Caller cancellation is rethrown and is not converted to a fallback or dependency 503.
+`ChatEndpoints.HandleAsync` and `HandleStreamAsync` pass `HttpContext.RequestAborted` through the orchestrator, specialists, MCP calls, vector search, and LLM calls. Caller cancellation is rethrown and is not converted to a fallback or dependency 503.
+
+### Optional streaming response
+
+`POST /api/chat/stream` uses SSE, a standard HTTP response that sends named events over one request. It emits these safe events in order:
+
+1. `progress` with `classifying`.
+2. `progress` with `retrieving`.
+3. `progress` with `generating`.
+4. One or more `content` events containing only public answer text.
+5. `progress` with `completed`.
+6. `completed` with response type, agent names, citations, assumptions, warnings, data period, model, and conversation ID. It intentionally omits the answer because it was delivered in the preceding `content` events.
+
+If validation fails before SSE starts, the endpoint returns the same HTTP 400 Problem Details format as `POST /api/chat`. If a dependency fails after SSE begins, it sends one sanitized `error` event with only a status and safe title; it never exposes an exception message, stack trace, prompt, raw RAG context, or raw MCP response. The Ollama adapter and the Microsoft Agent Framework-compatible `AgentChatMiddleware` both support `IChatClient.GetStreamingResponseAsync`; the endpoint keeps the established orchestrator and composed-result flow authoritative rather than asking the model to regenerate finance results solely for transport streaming.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant HTTP as ChatEndpoints
+    participant CFO as CfoOrchestratorAgent
+    participant Workers as Specialist agents
+
+    Client->>HTTP: POST /api/chat/stream
+    HTTP-->>Client: progress: classifying
+    HTTP->>CFO: ClassifyAsync(message)
+    CFO-->>HTTP: CfoIntent
+    HTTP-->>Client: progress: retrieving
+    HTTP->>CFO: HandleClassifiedAsync(message, intent)
+    CFO->>Workers: Retrieve data and compose result
+    Workers-->>CFO: AgentResult
+    CFO-->>HTTP: Composed AgentResult
+    HTTP-->>Client: progress: generating
+    HTTP-->>Client: content events (public answer only)
+    HTTP-->>Client: progress: completed
+    HTTP-->>Client: completed event (safe metadata)
+```
 
 ## 5. Internal architecture of CfoAgent.Api
 
