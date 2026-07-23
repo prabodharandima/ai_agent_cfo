@@ -150,6 +150,7 @@ builder.Services.AddSingleton<IChatClient>(serviceProvider =>
 builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>, DeterministicTokenHashEmbeddingGenerator>();
 builder.Services.AddScoped<RagDocumentIngestionService>();
 builder.Services.AddScoped<IFinancialKnowledgeSearch, ChromaFinancialKnowledgeSearch>();
+builder.Services.AddScoped<FinancialKnowledgeContextProvider>();
 builder.Services.AddHttpClient(McpToolAdapter.FinanceHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddHttpClient(McpToolAdapter.KnowledgeFilesHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddKeyedSingleton<IMcpToolAdapter>(McpToolAdapter.FinanceKey, (serviceProvider, _) =>

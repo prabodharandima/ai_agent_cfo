@@ -88,7 +88,7 @@ public sealed class CfoOrchestratorAgentTests
             new SalesForecastingService(),
             client,
             financeClient);
-        var knowledgeAgent = new FinancialKnowledgeAgent(knowledgeSearch, client, CreateRagOptions());
+        var knowledgeAgent = new FinancialKnowledgeAgent(new FinancialKnowledgeContextProvider(knowledgeSearch, CreateRagOptions()), client);
         var orchestrator = new CfoOrchestratorAgent(salesAgent, forecastAgent, knowledgeAgent, new AgentResultComposer(), client);
 
         var result = await orchestrator.HandleAsync(new AgentRequest("Give me the sales forecast for the next five years with assumptions."));
@@ -118,7 +118,7 @@ public sealed class CfoOrchestratorAgentTests
         var orchestrator = new CfoOrchestratorAgent(
             new SalesAnalysisAgent(client, financeClient),
             new ForecastingAgent(new SalesForecastingService(), client, financeClient),
-            new FinancialKnowledgeAgent(knowledgeSearch, client, CreateRagOptions()),
+            new FinancialKnowledgeAgent(new FinancialKnowledgeContextProvider(knowledgeSearch, CreateRagOptions()), client),
             new AgentResultComposer(),
             client);
 

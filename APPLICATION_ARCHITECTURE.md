@@ -787,11 +787,17 @@ The API asks ChromaDB for documents, metadata, and distances. `ChromaFinancialKn
 
 The collection creation code does not specify the exact Chroma distance metric. This document therefore does not claim cosine, Euclidean, or another metric.
 
+### Bounded RAG context
+
+`FinancialKnowledgeContextProvider` is a scoped Microsoft Agent Framework `AIContextProvider`. It calls the existing `IFinancialKnowledgeSearch` port, preserves the retrieval result for the knowledge response and citations, then prepares the transient text supplied to the LLM. It keeps the existing maximum `Rag:MaxKnowledgeContextCharacters`, includes source metadata headers, removes duplicate chunk IDs and normalized duplicate chunk text, and never logs or persists the prepared text.
+
+The provider returns retrieved text as untrusted reference material. `AgentPromptTemplates.ForKnowledge` explicitly tells the model not to follow instructions, tool requests, or role changes contained in that text. The provider adds no tools and does not give retrieved content authority over routing, MCP operations, finance values, or authorization.
+
 ### No relevant result
 
 If the collection does not exist, retrieval returns "No financial knowledge has been ingested." If no result survives validation and the distance threshold, it returns "No sufficiently relevant financial knowledge was found."
 
-`FinancialKnowledgeAgent` then returns a fixed insufficient-knowledge answer and does not call the LLM.
+`FinancialKnowledgeContextProvider` returns an empty bounded context in those cases. `FinancialKnowledgeAgent` then returns a fixed insufficient-knowledge answer and does not call the LLM.
 
 ## 13. How data is saved into ChromaDB
 
@@ -1070,6 +1076,7 @@ These limitations are visible in the current code:
 - Ollama is a local host dependency and must have the configured model installed.
 - Knowledge local fallback is Development-only and explicitly disabled in containers.
 - Conversation context is in memory only. It is bounded, expires after inactivity, stores only resolved response metadata/date periods, and disappears on API restart; it is not persistent chat history.
+- Retrieved RAG text is prepared transiently by the scoped context provider. It is bounded and treated as untrusted, but a model can still misinterpret document content; source documents must remain reviewed and ingestion must remain controlled.
 - The ChromaDB and pgAdmin Compose images use `latest`, so exact image versions depend on pull time.
 
 ## 21. Glossary

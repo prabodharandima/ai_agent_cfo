@@ -64,9 +64,10 @@ public sealed class FinancialKnowledgeRetrievalTests
         var retrieval = CreateSearch(new KnowledgeHandler());
         using var client = TestChatClient.CreateMvp();
         var agent = new FinancialKnowledgeAgent(
-            retrieval,
-            client,
-            Options.Create(new RagOptions { KnowledgeFilesRoot = "unused", MaxChunkCharacters = 256, MaxKnowledgeContextCharacters = 4000 }));
+            new FinancialKnowledgeContextProvider(
+                retrieval,
+                Options.Create(new RagOptions { KnowledgeFilesRoot = "unused", MaxChunkCharacters = 256, MaxKnowledgeContextCharacters = 4000 })),
+            client);
 
         var result = await agent.AnswerAsync(new AgentRequest("What is the annual target and what assumptions were used?"));
 
@@ -87,9 +88,10 @@ public sealed class FinancialKnowledgeRetrievalTests
         var retrieval = CreateSearch(new MissingCollectionHandler());
         using var client = TestChatClient.CreateMvp();
         var agent = new FinancialKnowledgeAgent(
-            retrieval,
-            client,
-            Options.Create(new RagOptions { KnowledgeFilesRoot = "unused", MaxChunkCharacters = 256, MaxKnowledgeContextCharacters = 4000 }));
+            new FinancialKnowledgeContextProvider(
+                retrieval,
+                Options.Create(new RagOptions { KnowledgeFilesRoot = "unused", MaxChunkCharacters = 256, MaxKnowledgeContextCharacters = 4000 })),
+            client);
 
         var result = await agent.AnswerAsync(new AgentRequest("What is the annual target?"));
 

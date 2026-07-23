@@ -26,7 +26,7 @@ The current Streamable HTTP clients use one minimal generic `McpToolAdapter` for
 
 ## Microsoft Agent Framework integration - Planned enhancement
 
-Microsoft Agent Framework integration is in progress. The compatible package, bounded chat middleware, structured intent/date output, the optional SSE endpoint, and bounded in-memory session context are implemented. RAG context-provider integration, OpenTelemetry, and the final regression/documentation gate remain planned.
+Microsoft Agent Framework integration is in progress. The compatible package, bounded chat middleware, structured intent/date output, the optional SSE endpoint, bounded in-memory session context, and bounded RAG context-provider integration are implemented. OpenTelemetry and the final regression/documentation gate remain planned.
 
 The planned task order is recorded in `tasks/maf_agent_integration/README.md`:
 
@@ -36,7 +36,7 @@ The planned task order is recorded in `tasks/maf_agent_integration/README.md`:
 4. Use structured LLM output only for intent classification and sales-summary date-range interpretation.
 5. Add an optional, separate streaming endpoint without changing `POST /api/chat`.
 6. Add bounded in-memory sessions keyed by the existing conversation ID.
-7. Integrate the existing RAG context preparation with a framework context-provider feature.
+7. Integrate the existing RAG context preparation with a framework context-provider feature. Completed by `FinancialKnowledgeContextProvider`; it retains ChromaDB retrieval, citations, bounds, duplicate control, and untrusted-content treatment.
 8. Add safe, optional OpenTelemetry instrumentation.
 9. Run regression validation and update current-state documentation only after implementation is verified.
 
