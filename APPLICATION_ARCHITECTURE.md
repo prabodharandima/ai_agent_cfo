@@ -143,6 +143,7 @@ flowchart TB
     FinancePort[IFinanceMcpClient port]
     VectorPort[IFinancialKnowledgeSearch port]
 
+    ChatMiddleware[AgentChatMiddleware]
     Ollama[OllamaChatClient]
     FinanceClient[FinanceMcpClient]
     McpAdapter[McpToolAdapter]
@@ -164,7 +165,7 @@ flowchart TB
     Forecast --> FinancePort
     Knowledge --> VectorPort
 
-    ChatPort --> Ollama
+    ChatPort --> ChatMiddleware --> Ollama
     FinancePort --> FinanceClient --> McpAdapter
     VectorPort --> ChromaAdapter --> ChromaClient
 ```
@@ -187,7 +188,9 @@ On success, the public response contains the prose answer, a stable response typ
 
 ### LLM abstraction
 
-Application code depends on `Microsoft.Extensions.AI.IChatClient`. At startup, the composition root reads `AI:Provider`, creates a provider-neutral `AiProviderDescriptor`, and registers the matching runtime client. Ollama is the only registered provider today, implemented by `OllamaChatClient`. Tests inject test-local `IChatClient` doubles, and agents do not contain provider transport code.
+Application code depends on `Microsoft.Extensions.AI.IChatClient`. At startup, the composition root reads `AI:Provider`, creates a provider-neutral `AiProviderDescriptor`, and registers the matching runtime client. Ollama is the only registered provider today, implemented by `OllamaChatClient`.
+
+Before it is injected into agents, `Program.cs` wraps the client with `AgentChatMiddleware` through the Microsoft Agent Framework-compatible `IChatClient` middleware pipeline. The middleware measures each non-streaming call, uses the request correlation ID for safe structured logs, blocks configured suspicious phrases, and redacts common sensitive values from text responses. It does not classify a request, select an agent, select an MCP server or tool, construct finance arguments, or replace `ApiExceptionHandler`. `PromptInjectionRiskException` is translated centrally to a sanitized HTTP 400 response. Tests inject test-local `IChatClient` doubles, and agents do not contain provider transport code.
 
 ### MCP adapter and typed client
 
@@ -207,7 +210,7 @@ Application code depends on `Microsoft.Extensions.AI.IChatClient`. At startup, t
 
 ### Error handling
 
-`RequestCorrelationMiddleware` assigns a safe correlation ID and logs request timing. `ApiExceptionHandler` translates known exceptions into sanitized HTTP responses.
+`RequestCorrelationMiddleware` assigns a safe correlation ID and logs HTTP request timing. `AgentChatMiddleware` adds safe per-LLM-call timing and metadata logging. `ApiExceptionHandler` translates known exceptions into sanitized HTTP responses.
 
 ## 6. End-to-end request flow
 
@@ -813,7 +816,7 @@ Current agents do not send MCP tool definitions to either provider. They do not 
 ```mermaid
 flowchart TD
     Failure[Operation fails] --> Type{Failure type}
-    Type -->|Invalid request| E400[400 validation Problem Details]
+    Type -->|Invalid request or prompt-risk rejection| E400[400 validation Problem Details]
     Type -->|MCP or Chroma dependency| E503[503 sanitized dependency response]
     Type -->|AI provider unavailable or invalid| O503[503 provider response]
     Type -->|AI provider or internal timeout| E504[504 timeout response]
@@ -825,6 +828,7 @@ flowchart TD
 | Situation | Current behavior |
 |---|---|
 | Missing/blank/oversized prompt | HTTP 400 validation Problem Details |
+| Configured prompt-risk phrase | `PromptInjectionRiskException`, sanitized HTTP 400 without calling the provider |
 | Unsupported request | HTTP 200 with an `unsupported` response and a scoped message |
 | Finance/Knowledge MCP unavailable | `McpDependencyException`, normally sanitized HTTP 503 |
 | Required MCP tool missing | `CapabilityMismatch`, mapped to sanitized HTTP 503 during a request/readiness unhealthy |
@@ -854,6 +858,8 @@ The local and container defaults are intentionally different. Local `appsettings
 | `AI:Ollama:Temperature` / `OLLAMA_TEMPERATURE` | Ollama sampling variability | `0` | Ollama request | 0 through 2 |
 | `AI:Ollama:ContextLength` / `OLLAMA_CONTEXT_LENGTH` | Ollama context size | `4096` | Ollama request | 1,024 through 32,768 |
 | `AI:Ollama:MaxOutputTokens` / `OLLAMA_MAX_OUTPUT_TOKENS` | Maximum completion size | `512` | Ollama request | 1 through 1,024 and below context length |
+| `AgentMiddleware:PromptInjectionCheckEnabled` / `AgentMiddleware__PromptInjectionCheckEnabled` | Enable deterministic prompt-risk checks | `true` | `AgentChatMiddleware` | When enabled, requires at least one phrase |
+| `AgentMiddleware:SuspiciousPromptPhrases` / `AgentMiddleware__SuspiciousPromptPhrases__0` | Phrases that cause a request to be blocked before the provider call | `ignore previous instructions` | `AgentChatMiddleware` | Nonblank and unique, case-insensitively |
 | `Mcp:Finance:Enabled` | Enable required Finance MCP | `true` | Finance adapter/readiness | Finance readiness is unhealthy when false |
 | `Mcp:Finance:BaseUrl` / `FINANCE_MCP_BASE_URL` | Finance MCP service address | `http://finance-mcp:8080` | Finance keyed adapter | Absolute HTTP URL when enabled |
 | `Mcp:Finance:TimeoutSeconds` | Finance MCP timeout | `10` | Finance keyed adapter | Positive |

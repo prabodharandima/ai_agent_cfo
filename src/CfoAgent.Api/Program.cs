@@ -67,6 +67,16 @@ builder.Services.AddOptions<AiOptions>()
     .Validate(options => options.Ollama.MaxOutputTokens is >= 1 and <= 1_024 && options.Ollama.MaxOutputTokens < options.Ollama.ContextLength, "AI:Ollama:MaxOutputTokens must be between 1 and 1024 and less than AI:Ollama:ContextLength.")
     .ValidateOnStart();
 
+builder.Services.AddOptions<AgentMiddlewareOptions>()
+    .BindConfiguration(AgentMiddlewareOptions.SectionName)
+    .Validate(options => !options.PromptInjectionCheckEnabled || options.SuspiciousPromptPhrases.Count > 0,
+        "AgentMiddleware:SuspiciousPromptPhrases must contain at least one phrase when prompt injection checks are enabled.")
+    .Validate(options => options.SuspiciousPromptPhrases.All(phrase => !string.IsNullOrWhiteSpace(phrase)),
+        "AgentMiddleware:SuspiciousPromptPhrases must not contain blank phrases.")
+    .Validate(options => options.SuspiciousPromptPhrases.Distinct(StringComparer.OrdinalIgnoreCase).Count() == options.SuspiciousPromptPhrases.Count,
+        "AgentMiddleware:SuspiciousPromptPhrases must not contain duplicates.")
+    .ValidateOnStart();
+
 builder.Services.AddOptions<McpOptions>()
     .BindConfiguration(McpOptions.SectionName)
     .Validate(options => options.Finance.TimeoutSeconds > 0, "Mcp:Finance:TimeoutSeconds must be greater than zero.")
@@ -105,6 +115,8 @@ builder.Services.AddSingleton<AiProviderDescriptor>(serviceProvider =>
         _ => throw new InvalidOperationException("The configured AI provider is not registered.")
     };
 });
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton<AgentChatMiddleware>();
 builder.Services.AddHttpClient(OllamaOptions.HttpClientName, (serviceProvider, client) =>
 {
     var ollama = serviceProvider.GetRequiredService<OllamaOptions>();
@@ -117,13 +129,13 @@ builder.Services.AddSingleton<IChatClient>(serviceProvider =>
     return provider.ProviderName switch
     {
         var providerName when string.Equals(providerName, "Ollama", StringComparison.OrdinalIgnoreCase) =>
-            new OllamaChatClient(
+            serviceProvider.GetRequiredService<AgentChatMiddleware>().Wrap(new OllamaChatClient(
                 (IChatClient)new OllamaApiClient(
                     serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient(OllamaOptions.HttpClientName),
                     provider.ModelName),
                 serviceProvider.GetRequiredService<OllamaOptions>(),
                 provider,
-                serviceProvider.GetRequiredService<ILogger<OllamaChatClient>>()),
+                serviceProvider.GetRequiredService<ILogger<OllamaChatClient>>())),
         _ => throw new InvalidOperationException("The configured AI provider is not registered.")
     };
 });

@@ -17,6 +17,7 @@ public sealed class OllamaChatClient : IChatClient
     private readonly AiProviderDescriptor provider;
     private readonly ILogger<OllamaChatClient> logger;
 
+    // OKF -
     public OllamaChatClient(
         IChatClient transport,
         OllamaOptions options,

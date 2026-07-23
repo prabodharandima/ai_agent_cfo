@@ -24,6 +24,26 @@ The current Streamable HTTP clients use one minimal generic `McpToolAdapter` for
 
 `CfoAgent.Api` now has one explicit `CfoOrchestratorAgent`, three focused specialist workers, and a concrete deterministic `AgentResultComposer`. HTTP stays in `ChatEndpoints`; the orchestrator only classifies and routes bounded intents; specialists use `IChatClient`, typed MCP ports, or `IFinancialKnowledgeSearch` as appropriate. `McpToolAdapter` owns MCP SDK transport, and `ChromaFinancialKnowledgeSearch` owns the Chroma-backed vector-search adapter. The API has no PostgreSQL dependency, no Ollama-specific agent code, no MCP transport code in agents, and no second LLM composition pass. The completed refactor and final validation evidence are recorded in `docs/CFO-AGENT-API-REFACTOR-RESULTS.md`.
 
+## Microsoft Agent Framework integration - Planned enhancement
+
+The Microsoft Agent Framework work is planned only. No Microsoft Agent Framework package, middleware, structured-output API, streaming endpoint, agent session, RAG context provider, or OpenTelemetry integration is part of the current implementation.
+
+The planned task order is recorded in `tasks/maf_agent_integration/README.md`:
+
+1. Update planning documents.
+2. Confirm compatible packages and APIs against the current `net10.0`, `Microsoft.Extensions.AI.Abstractions` 10.8.0, and Ollama implementation.
+3. Add bounded agent middleware.
+4. Use structured LLM output only for intent classification and sales-summary date-range interpretation.
+5. Add an optional, separate streaming endpoint without changing `POST /api/chat`.
+6. Add bounded in-memory sessions keyed by the existing conversation ID.
+7. Integrate the existing RAG context preparation with a framework context-provider feature.
+8. Add safe, optional OpenTelemetry instrumentation.
+9. Run regression validation and update current-state documentation only after implementation is verified.
+
+Package names, versions, and exact APIs are **TBA - verify during TASK-MAF-001**. The framework must be compatible with the target framework and current `IChatClient`/Ollama SDK integration; it must not force an incompatible chat-client model, duplicate existing exception handling, or weaken offline tests. Each task must remain independently buildable and testable, use one Codex session and one commit, and create its matching `TASK-MAF-XXX-RESULT.md` file before the next task begins.
+
+The following boundaries remain non-negotiable throughout this planned work: deterministic C# and SQL finance values, canonical date validation, typed Finance MCP routing and allow-lists, Knowledge MCP filesystem restrictions, ChromaDB retrieval/citations, cancellation propagation, and sanitized dependency failures. `APPLICATION_ARCHITECTURE.md` must describe only verified current behavior; planned framework work belongs in this section and the task pack until implemented and tested.
+
 ## Validation
 
 Use serialized solution commands:

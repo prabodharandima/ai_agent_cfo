@@ -66,6 +66,8 @@ OLLAMA_MODEL=llama3.2:3b
 
 For direct `dotnet run` development, .NET does not automatically load `.env`; use `appsettings.json`, user secrets, or normal `AI__...` environment variables instead.
 
+The API's LLM-call middleware is enabled by default. It records only safe operational metadata, blocks configured suspicious prompt phrases before an Ollama request, and redacts common sensitive values from text responses. For a direct `dotnet run` session, the matching environment variables are `AgentMiddleware__PromptInjectionCheckEnabled` and indexed `AgentMiddleware__SuspiciousPromptPhrases__0`, `__1`, and so on. The deployed defaults are in `src/CfoAgent.Api/appsettings.json`.
+
 ## 4. Start everything with Docker
 
 From the repository root:
