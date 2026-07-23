@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using System.Globalization;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 
 namespace CfoAgent.Api.Tests.AI;
@@ -76,9 +78,14 @@ internal sealed class TestChatClient : IChatClient
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (prompt.Contains("USER_REQUEST:", StringComparison.Ordinal))
+        if (prompt.Contains("STRUCTURED_SALES_PERIOD_OUTPUT", StringComparison.Ordinal))
         {
-            return Task.FromResult(Classify(prompt));
+            return Task.FromResult(ResolveSalesSummaryPeriod(prompt));
+        }
+
+        if (prompt.Contains("STRUCTURED_INTENT_OUTPUT", StringComparison.Ordinal))
+        {
+            return Task.FromResult(JsonSerializer.Serialize(new { intent = Classify(prompt) }));
         }
 
         if (prompt.Contains("VERIFIED_DATA:", StringComparison.Ordinal))
@@ -133,6 +140,15 @@ internal sealed class TestChatClient : IChatClient
         }
 
         return "Unsupported";
+    }
+
+    private static string ResolveSalesSummaryPeriod(string prompt)
+    {
+        const string marker = "The reference date is ";
+        var referenceDateText = GetContentAfter(prompt, marker).Split('.', 2)[0];
+        var referenceDate = DateOnly.ParseExact(referenceDateText, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var startDate = referenceDate.AddDays(-((int)referenceDate.DayOfWeek + 6) % 7);
+        return JsonSerializer.Serialize(new { startDate, endDate = referenceDate });
     }
 
     private static string GetContentAfter(string value, string marker)

@@ -228,13 +228,18 @@ flowchart TD
     E -->|Mixed| I[Forecasting plus Knowledge]
     E -->|Unsupported| U[Return scoped unsupported result]
 
-    F --> J[6. Identify Finance MCP operation]
+    F --> FD{6. Current-week request?}
+    FD -->|yes| J[7. Identify Finance MCP operation]
+    FD -->|no| FP[7. LLM proposes structured date range]
+    FP --> FV[8. C# validates and canonicalizes dates]
+    FV -->|valid| J
+    FV -->|invalid| X503[Return sanitized provider dependency problem]
     G --> J
     H --> K[6. Identify ChromaDB retrieval]
     I --> J
     I --> K
 
-    J --> L[7. Discover and call approved MCP tool]
+    J --> L[9. Discover and call approved MCP tool]
     K --> M[7. Embed question and query ChromaDB]
 
     L --> N[8. Map finance result or calculate forecast]
@@ -248,7 +253,7 @@ flowchart TD
     S --> T[Return JSON response]
 ```
 
-The LLM is used twice conceptually: once for bounded intent classification and once by the selected specialist to phrase verified information. There is no extra final LLM composition call.
+The LLM is used for bounded intent classification and by specialists to phrase verified information. For a sales-summary request that is not explicitly for the current week, it also proposes a JSON date range. C# parses, bounds, and canonicalizes that proposal before Finance MCP is called. There is no extra final LLM composition call.
 
 ## 7. How the system decides what to do
 
@@ -259,13 +264,13 @@ The four decisions below are deliberately separate. Keeping them separate preven
 | Intent | `CfoOrchestratorAgent` with a bounded `IChatClient` answer and keyword fallback | `Forecast` | Which database or tool to call |
 | Specialist agent | Explicit C# switch in the orchestrator | `ForecastingAgent` | Whether to invent a new agent or workflow |
 | MCP server | The selected agent's injected port | Finance MCP for Sales/Forecasting | Which endpoint to contact |
-| MCP tool and arguments | Typed client method plus the MCP allow-list | `get_historical_sales` with five deterministic years | Tool name, dates, limits, or financial values |
+| MCP tool and arguments | Typed client method plus the MCP allow-list | `get_historical_sales` with five deterministic years | Tool name, limits, or financial values; a non-current sales-summary date proposal is validated and canonicalized in C# before use |
 
 ### 7.1 How intent is identified
 
 Intent identification is hybrid.
 
-First, `CfoOrchestratorAgent.ClassifyAsync` sends a prompt through the configured `IChatClient`. The prompt allows only:
+First, `CfoOrchestratorAgent.ClassifyAsync` sends a schema-bound prompt through the configured `IChatClient`. `ChatResponseFormat.ForJsonSchema<IntentClassificationOutput>` asks the provider for JSON with one `intent` property. The allowed values are:
 
 - `SalesSummary`
 - `SalesComparison`
@@ -275,11 +280,19 @@ First, `CfoOrchestratorAgent.ClassifyAsync` sends a prompt through the configure
 - `Mixed`
 - `Unsupported`
 
-The response must exactly match one enum name and must be no longer than 64 characters.
+The API parses the JSON and accepts only a known non-`Unsupported` enum value. The bounded response is limited to 256 characters.
 
 If that response is not valid, `ClassifyDeterministically` applies keyword rules. For example, `COMPARE` or `VERSUS` means Sales Comparison; `TOP` plus `PRODUCT` means Top Products; and `FORECAST` plus `TARGET`, `ASSUMPTION`, or `RISK` means Mixed.
 
 This fallback handles malformed model output. It does not handle an unavailable LLM: provider exceptions propagate.
+
+### 7.1.1 How sales-summary dates are interpreted
+
+`SalesAnalysisAgent.GetWeeklySummaryAsync` retains the deterministic current-week path for requests that explicitly say `this week` or `current week`: it calls `IFinanceMcpClient.GetCurrentWeekSummaryAsync`.
+
+For another sales-summary period, `ResolveSalesSummaryPeriodAsync` asks the configured `IChatClient` for `SalesSummaryDateRangeOutput` JSON containing inclusive `startDate` and `endDate` values in `YYYY-MM-DD` format. The model only proposes the dates. Before any Finance MCP call, C# requires both dates to parse exactly, rejects future dates, requires `endDate >= startDate`, and limits the inclusive range to 366 days. It then converts the parsed `DateOnly` values back to canonical `YYYY-MM-DD` Finance MCP arguments.
+
+Malformed or unsafe date output is treated as an invalid model response and is returned through the existing sanitized provider-failure path. It never reaches Finance MCP. The model still does not calculate or alter revenue, profit, rankings, forecasts, or any other authoritative finance value.
 
 ### 7.2 How the specialist agent is selected
 
@@ -322,6 +335,7 @@ What is fixed in application logic:
 
 | Typed method | Hard-coded MCP tool |
 |---|---|
+| `GetSalesSummaryAsync` | `get_sales_summary` |
 | `GetCurrentWeekSummaryAsync` | `get_sales_summary` |
 | `GetWeekOverWeekComparisonAsync` | `compare_sales_periods` |
 | `GetCurrentMonthTopProductsAsync` | `get_top_products` |
@@ -330,7 +344,7 @@ What is fixed in application logic:
 | `KnowledgeFileMcpHttpClient.ListFilesAsync` | `list_knowledge_files` |
 | `KnowledgeFileMcpHttpClient.ReadFileAsync` | `read_knowledge_file` |
 
-Discovered tools are not passed to the LLM in the current agent flow. The LLM does not choose the final tool. It also does not create Finance tool arguments.
+Discovered tools are not passed to the LLM in the current agent flow. The LLM does not choose the final tool. For non-current sales summaries only, it proposes a date range; the sales agent validates and canonicalizes that range before the typed client creates Finance MCP arguments.
 
 The generic adapter can call another discovered and approved tool by name without adding an adapter method, but that alone does not make the tool available to a chat scenario. A business route or typed operation would still have to request it.
 

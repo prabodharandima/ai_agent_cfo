@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CfoAgent.Api.Features.Sales;
 using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Tests.Finance;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -17,6 +18,7 @@ public sealed class FinanceMcpClientTests
             NullLogger<FinanceMcpClient>.Instance);
 
         await client.GetCurrentWeekSummaryAsync(CancellationToken.None);
+        await client.GetSalesSummaryAsync(new SalesPeriod(new DateOnly(2026, 7, 1), new DateOnly(2026, 7, 15)), CancellationToken.None);
         await client.GetWeekOverWeekComparisonAsync(CancellationToken.None);
         await client.GetCurrentMonthTopProductsAsync(CancellationToken.None);
         await client.GetHistoricalYearlyTotalsAsync(CancellationToken.None);
@@ -25,6 +27,7 @@ public sealed class FinanceMcpClientTests
         Assert.Collection(
             adapter.Calls,
             call => AssertCall(call, "get_sales_summary", ("startDate", "2026-07-13"), ("endDate", "2026-07-15")),
+            call => AssertCall(call, "get_sales_summary", ("startDate", "2026-07-01"), ("endDate", "2026-07-15")),
             call => AssertCall(
                 call,
                 "compare_sales_periods",

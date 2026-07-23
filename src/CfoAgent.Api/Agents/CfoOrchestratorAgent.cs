@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using CfoAgent.Api.AI;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
@@ -17,7 +18,8 @@ public sealed class CfoOrchestratorAgent(
     IChatClient chatClient,
     ILogger<CfoOrchestratorAgent>? logger = null)
 {
-    private const int MaximumClassificationResponseCharacters = 64;
+    private const int MaximumClassificationResponseCharacters = 256;
+    private static readonly JsonSerializerOptions StructuredOutputJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly ILogger<CfoOrchestratorAgent> _logger = logger ?? NullLogger<CfoOrchestratorAgent>.Instance;
 
     public async Task<CfoIntent> ClassifyAsync(string message, CancellationToken cancellationToken = default)
@@ -26,10 +28,17 @@ public sealed class CfoOrchestratorAgent(
 
         var response = await chatClient.GetResponseAsync(
             [new ChatMessage(ChatRole.User, AgentPromptTemplates.ForClassification(message))],
-            new ChatOptions { Instructions = AgentDefinitions.CfoOrchestrator.SystemInstructions },
+            new ChatOptions
+            {
+                Instructions = AgentDefinitions.CfoOrchestrator.SystemInstructions,
+                ResponseFormat = ChatResponseFormat.ForJsonSchema<IntentClassificationOutput>(
+                    StructuredOutputJsonOptions,
+                    "cfo_intent_classification",
+                    "A validated CFO request intent.")
+            },
             cancellationToken);
 
-        return TryParseIntent(response.Text, out var intent) && intent != CfoIntent.Unsupported
+        return TryParseStructuredIntent(response.Text, out var intent) && intent != CfoIntent.Unsupported
             ? intent
             : ClassifyDeterministically(message);
     }
@@ -110,7 +119,7 @@ public sealed class CfoOrchestratorAgent(
         Array.Empty<string>(),
             null);
 
-    private static bool TryParseIntent(string? response, out CfoIntent intent)
+    private static bool TryParseStructuredIntent(string? response, out CfoIntent intent)
     {
         intent = CfoIntent.Unsupported;
         if (string.IsNullOrWhiteSpace(response) || response.Length > MaximumClassificationResponseCharacters)
@@ -118,7 +127,26 @@ public sealed class CfoOrchestratorAgent(
             return false;
         }
 
-        var candidate = response.Trim();
+        try
+        {
+            var output = JsonSerializer.Deserialize<IntentClassificationOutput>(response, StructuredOutputJsonOptions);
+            return output is not null && TryParseIntent(output.Intent, out intent);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryParseIntent(string? candidate, out CfoIntent intent)
+    {
+        intent = CfoIntent.Unsupported;
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return false;
+        }
+
+        candidate = candidate.Trim();
         foreach (var allowedIntent in Enum.GetValues<CfoIntent>())
         {
             if (string.Equals(candidate, allowedIntent.ToString(), StringComparison.OrdinalIgnoreCase))

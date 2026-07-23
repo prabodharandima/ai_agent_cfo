@@ -10,7 +10,8 @@ public static class AgentPromptTemplates
     private const string VerifiedDataInstructions = "Write a concise executive response using only VERIFIED_DATA. Do not calculate, change, or add financial values. Return prose only; do not return tool calls.";
 
     public static string ForClassification(string message) => $$"""
-        Classify the final user request. Return exactly one intent name and no other text:
+        STRUCTURED_INTENT_OUTPUT
+        Classify the final user request as JSON with exactly one property named "intent". Its value must be one of:
         SalesSummary, SalesComparison, TopProducts, Forecast, Knowledge, Mixed, or Unsupported.
 
         Route requests using these rules:
@@ -26,6 +27,18 @@ public static class AgentPromptTemplates
         - "What is the annual sales target and what assumptions were used?" => Knowledge
         - "What financial risks are documented for the business?" => Knowledge
         - "Give me the forecast with assumptions and risks." => Mixed
+
+        USER_REQUEST:
+        {{message}}
+        """;
+
+    public static string ForSalesSummaryDateRange(string message, DateOnly currentDate) => $$"""
+        STRUCTURED_SALES_PERIOD_OUTPUT
+        Interpret the final user request as a sales-summary date range. Return JSON with exactly these properties:
+        - "startDate": inclusive date in YYYY-MM-DD format.
+        - "endDate": inclusive date in YYYY-MM-DD format.
+
+        The reference date is {{currentDate:yyyy-MM-dd}}. Do not return a date later than the reference date. If the request does not name a period, use the Monday of the reference week through the reference date. Do not calculate financial values or invoke tools.
 
         USER_REQUEST:
         {{message}}
