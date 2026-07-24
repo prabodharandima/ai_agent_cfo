@@ -2,13 +2,11 @@
 
 ## Status and scope
 
-This is a **planned enhancement**. The current application does not yet use Microsoft Agent Framework packages or APIs. The existing `CfoAgent.Api` request flow, `IChatClient`/Ollama integration, typed MCP facades, ChromaDB retrieval, and deterministic financial calculations remain the source of truth until each later task is implemented and validated.
+This task pack is **complete**. `CfoAgent.Api` uses `Microsoft.Agents.AI` 1.13.0 with `Microsoft.Extensions.AI.Abstractions` 10.8.0 on `net10.0`. The verified integration is deliberately bounded: `AgentChatMiddleware` wraps the existing `IChatClient`; structured output is limited to intent classification and sales-summary date ranges; `POST /api/chat/stream` is a separate compatible SSE endpoint; sessions retain bounded metadata only; `FinancialKnowledgeContextProvider` prepares bounded transient RAG context; and `AgentTelemetry` exposes safe OpenTelemetry-compatible signals.
 
-The intended features are bounded agent middleware, structured LLM output for classification and sales-summary date ranges, an optional streaming endpoint, bounded in-memory sessions, RAG context-provider integration, and safe optional OpenTelemetry. They must not be described as implemented in current-state architecture documentation before their individual task is complete.
+The integration does not change the authoritative architecture. `CfoAgent.Api` remains the business orchestrator; typed MCP facades and allow-lists retain deterministic Finance tool routing; ChromaDB remains the semantic retrieval and citation source; and deterministic C# and SQL calculations remain authoritative. Normal tests use test-local `IChatClient` doubles and do not require live Ollama.
 
-Package names, versions, and exact framework APIs are **TBA - verify during TASK-MAF-001**. The chosen package set must support `net10.0` and coexist with `Microsoft.Extensions.AI.Abstractions` 10.8.0 and the current Ollama `IChatClient` adapter. Compatibility risks include incompatible chat abstractions, duplicate error/cancellation handling, changes to public chat behavior, and accidentally introducing live-provider requirements into normal automated tests.
-
-Execute the tasks in order, using one Codex session per task.
+The result files record the validated implementation and regression evidence for each task.
 
 ## Order
 

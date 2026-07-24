@@ -24,25 +24,20 @@ The current Streamable HTTP clients use one minimal generic `McpToolAdapter` for
 
 `CfoAgent.Api` now has one explicit `CfoOrchestratorAgent`, three focused specialist workers, and a concrete deterministic `AgentResultComposer`. HTTP stays in `ChatEndpoints`; the orchestrator only classifies and routes bounded intents; specialists use `IChatClient`, typed MCP ports, or `IFinancialKnowledgeSearch` as appropriate. `McpToolAdapter` owns MCP SDK transport, and `ChromaFinancialKnowledgeSearch` owns the Chroma-backed vector-search adapter. The API has no PostgreSQL dependency, no Ollama-specific agent code, no MCP transport code in agents, and no second LLM composition pass. The completed refactor and final validation evidence are recorded in `docs/CFO-AGENT-API-REFACTOR-RESULTS.md`.
 
-## Microsoft Agent Framework integration - Planned enhancement
+## Microsoft Agent Framework integration - Complete
 
-Microsoft Agent Framework integration is in progress. The compatible package, bounded chat middleware, structured intent/date output, the optional SSE endpoint, bounded in-memory session context, bounded RAG context-provider integration, and safe OpenTelemetry-compatible tracing and metrics are implemented. Only the final regression/documentation gate remains planned.
+`CfoAgent.Api` uses `Microsoft.Agents.AI` 1.13.0 with `Microsoft.Extensions.AI.Abstractions` 10.8.0 on `net10.0`. The completed integration keeps the existing architecture explicit and bounded:
 
-The planned task order is recorded in `tasks/maf_agent_integration/README.md`:
+1. `AgentChatMiddleware` wraps the composition-root `IChatClient` for prompt-risk checks, safe logging, redaction, timing, and cancellation preservation.
+2. Structured model output is used only for intent classification and sales-summary date-range interpretation. C# validates and canonicalizes dates before the typed Finance MCP facade is called.
+3. `POST /api/chat/stream` is an optional SSE endpoint; `POST /api/chat` and its JSON contract remain unchanged.
+4. `InMemoryAgentSessionStore` keeps bounded response metadata and optional date periods per conversation ID. It never stores prompts, answers, raw RAG content, or MCP data.
+5. `FinancialKnowledgeContextProvider` prepares bounded transient RAG context, retains citations and duplicate control, and treats retrieved text as untrusted.
+6. `AgentTelemetry` publishes safe OpenTelemetry-compatible activities and metrics without requiring an exporter.
 
-1. Update planning documents.
-2. Confirm compatible packages and APIs against the current `net10.0`, `Microsoft.Extensions.AI.Abstractions` 10.8.0, and Ollama implementation.
-3. Add bounded agent middleware.
-4. Use structured LLM output only for intent classification and sales-summary date-range interpretation.
-5. Add an optional, separate streaming endpoint without changing `POST /api/chat`.
-6. Add bounded in-memory sessions keyed by the existing conversation ID.
-7. Integrate the existing RAG context preparation with a framework context-provider feature. Completed by `FinancialKnowledgeContextProvider`; it retains ChromaDB retrieval, citations, bounds, duplicate control, and untrusted-content treatment.
-8. Add safe, optional OpenTelemetry instrumentation.
-9. Run regression validation and update current-state documentation only after implementation is verified.
+Normal automated tests use test-local `IChatClient` doubles. Live Ollama tests remain opt-in. The completed task records are under `tasks/maf_agent_integration/`.
 
-Package names, versions, and exact APIs are **TBA - verify during TASK-MAF-001**. The framework must be compatible with the target framework and current `IChatClient`/Ollama SDK integration; it must not force an incompatible chat-client model, duplicate existing exception handling, or weaken offline tests. Each task must remain independently buildable and testable, use one Codex session and one commit, and create its matching `TASK-MAF-XXX-RESULT.md` file before the next task begins.
-
-The following boundaries remain non-negotiable throughout this planned work: deterministic C# and SQL finance values, canonical date validation, typed Finance MCP routing and allow-lists, Knowledge MCP filesystem restrictions, ChromaDB retrieval/citations, cancellation propagation, and sanitized dependency failures. `APPLICATION_ARCHITECTURE.md` must describe only verified current behavior; planned framework work belongs in this section and the task pack until implemented and tested.
+The following boundaries remain non-negotiable: deterministic C# and SQL finance values, canonical date validation, typed Finance MCP routing and allow-lists, Knowledge MCP filesystem restrictions, ChromaDB retrieval/citations, cancellation propagation, and sanitized dependency failures.
 
 ## Validation
 

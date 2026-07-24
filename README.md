@@ -15,6 +15,10 @@ flowchart LR
 
 Financial values are deterministic C# and SQL results. The runtime LLM is selected through the existing `IChatClient` boundary; Ollama is the only registered provider today and is never an authority for finance calculations.
 
+## Agent integration
+
+`CfoAgent.Api` uses `Microsoft.Agents.AI` 1.13.0 with `Microsoft.Extensions.AI.Abstractions` 10.8.0. The integration adds bounded chat middleware, schema-based intent and date interpretation, an optional SSE endpoint at `POST /api/chat/stream`, metadata-only in-memory sessions, bounded RAG context preparation, and safe OpenTelemetry-compatible signals. It does not change deterministic finance calculations, typed MCP routing, MCP allow-lists, ChromaDB citations, or the default `POST /api/chat` contract. Normal tests use local test doubles; live Ollama tests are opt-in.
+
 ## Start the complete application
 
 Prerequisites: Docker Desktop, .NET SDK selected by `global.json`, and Node.js 22 or later for local frontend validation. Ollama is optional and runs on the Windows host.

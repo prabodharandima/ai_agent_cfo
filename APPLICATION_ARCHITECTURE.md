@@ -229,7 +229,7 @@ Sessions are isolated per conversation ID, expire after inactivity, retain only 
 
 ### LLM abstraction
 
-Application code depends on `Microsoft.Extensions.AI.IChatClient`. At startup, the composition root reads `AI:Provider`, creates a provider-neutral `AiProviderDescriptor`, and registers the matching runtime client. Ollama is the only registered provider today, implemented by `OllamaChatClient`.
+Application code depends on `Microsoft.Extensions.AI.IChatClient` from `Microsoft.Extensions.AI.Abstractions` 10.8.0. The bounded framework features use `Microsoft.Agents.AI` 1.13.0. At startup, the composition root reads `AI:Provider`, creates a provider-neutral `AiProviderDescriptor`, and registers the matching runtime client. Ollama is the only registered provider today, implemented by `OllamaChatClient`.
 
 Before it is injected into agents, `Program.cs` wraps the client with `AgentChatMiddleware` through the Microsoft Agent Framework-compatible `IChatClient` middleware pipeline. The middleware measures each non-streaming call, uses the request correlation ID for safe structured logs, blocks configured suspicious phrases, and redacts common sensitive values from text responses. It does not classify a request, select an agent, select an MCP server or tool, construct finance arguments, or replace `ApiExceptionHandler`. `PromptInjectionRiskException` is translated centrally to a sanitized HTTP 400 response. Tests inject test-local `IChatClient` doubles, and agents do not contain provider transport code.
 
