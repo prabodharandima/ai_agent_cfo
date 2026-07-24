@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
 using CfoAgent.Api.Configuration;
+using CfoAgent.Api.Observability;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 
@@ -33,6 +34,7 @@ public sealed partial class AgentChatMiddleware(
             ?? Activity.Current?.TraceId.ToString()
             ?? "none";
         var metadata = GetMetadata(innerClient, chatOptions);
+        var telemetry = AgentTelemetry.Start("llm.request", provider: metadata.ProviderName, model: metadata.DefaultModelId);
 
         if (ContainsSuspiciousPrompt(requestMessages))
         {
@@ -43,6 +45,7 @@ public sealed partial class AgentChatMiddleware(
                 metadata.DefaultModelId,
                 requestMessages.Length,
                 "Blocked");
+            AgentTelemetry.Complete(telemetry, "llm.request", Stopwatch.StartNew(), "Failure", provider: metadata.ProviderName, model: metadata.DefaultModelId);
             throw new PromptInjectionRiskException();
         }
 
@@ -52,16 +55,19 @@ public sealed partial class AgentChatMiddleware(
             var response = await innerClient.GetResponseAsync(requestMessages, chatOptions, cancellationToken);
             var redactedResponse = RedactSensitiveOutput(response, out var wasRedacted);
             LogOutcome(correlationId, metadata, requestMessages.Length, stopwatch, "Success", wasRedacted);
+            AgentTelemetry.Complete(telemetry, "llm.request", stopwatch, "Success", provider: metadata.ProviderName, model: metadata.DefaultModelId);
             return redactedResponse;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             LogOutcome(correlationId, metadata, requestMessages.Length, stopwatch, "Cancelled", wasRedacted: false);
+            AgentTelemetry.Complete(telemetry, "llm.request", stopwatch, "Cancelled", provider: metadata.ProviderName, model: metadata.DefaultModelId);
             throw;
         }
         catch
         {
             LogOutcome(correlationId, metadata, requestMessages.Length, stopwatch, "Failure", wasRedacted: false);
+            AgentTelemetry.Complete(telemetry, "llm.request", stopwatch, "Failure", provider: metadata.ProviderName, model: metadata.DefaultModelId);
             throw;
         }
     }
@@ -80,6 +86,7 @@ public sealed partial class AgentChatMiddleware(
             ?? Activity.Current?.TraceId.ToString()
             ?? "none";
         var metadata = GetMetadata(innerClient, chatOptions);
+        var telemetry = AgentTelemetry.Start("llm.request", provider: metadata.ProviderName, model: metadata.DefaultModelId);
 
         if (ContainsSuspiciousPrompt(requestMessages))
         {
@@ -90,6 +97,7 @@ public sealed partial class AgentChatMiddleware(
                 metadata.DefaultModelId,
                 requestMessages.Length,
                 "Blocked");
+            AgentTelemetry.Complete(telemetry, "llm.request", Stopwatch.StartNew(), "Failure", provider: metadata.ProviderName, model: metadata.DefaultModelId);
             throw new PromptInjectionRiskException();
         }
 
@@ -114,11 +122,13 @@ public sealed partial class AgentChatMiddleware(
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 LogOutcome(correlationId, metadata, requestMessages.Length, stopwatch, "Cancelled", wasRedacted: outputRedacted);
+                AgentTelemetry.Complete(telemetry, "llm.request", stopwatch, "Cancelled", provider: metadata.ProviderName, model: metadata.DefaultModelId);
                 throw;
             }
             catch
             {
                 LogOutcome(correlationId, metadata, requestMessages.Length, stopwatch, "Failure", wasRedacted: outputRedacted);
+                AgentTelemetry.Complete(telemetry, "llm.request", stopwatch, "Failure", provider: metadata.ProviderName, model: metadata.DefaultModelId);
                 throw;
             }
 
@@ -126,6 +136,7 @@ public sealed partial class AgentChatMiddleware(
         }
 
         LogOutcome(correlationId, metadata, requestMessages.Length, stopwatch, "Success", outputRedacted);
+        AgentTelemetry.Complete(telemetry, "llm.request", stopwatch, "Success", provider: metadata.ProviderName, model: metadata.DefaultModelId);
     }
 
     private bool ContainsSuspiciousPrompt(IReadOnlyList<ChatMessage> messages) =>

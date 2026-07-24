@@ -233,6 +233,10 @@ Application code depends on `Microsoft.Extensions.AI.IChatClient`. At startup, t
 
 Before it is injected into agents, `Program.cs` wraps the client with `AgentChatMiddleware` through the Microsoft Agent Framework-compatible `IChatClient` middleware pipeline. The middleware measures each non-streaming call, uses the request correlation ID for safe structured logs, blocks configured suspicious phrases, and redacts common sensitive values from text responses. It does not classify a request, select an agent, select an MCP server or tool, construct finance arguments, or replace `ApiExceptionHandler`. `PromptInjectionRiskException` is translated centrally to a sanitized HTTP 400 response. Tests inject test-local `IChatClient` doubles, and agents do not contain provider transport code.
 
+### OpenTelemetry-compatible observability
+
+`Observability/AgentTelemetry.cs` publishes standard .NET `ActivitySource` spans and `Meter` metrics. Instrumentation covers the chat request, intent classification, specialist execution, LLM calls, Finance and Knowledge MCP operations, ChromaDB retrieval, and result composition. Each signal is restricted to safe operational attributes: correlation ID, operation, agent, provider, model, outcome, and duration. It deliberately excludes prompts, answers, MCP arguments/results, retrieved chunks, raw finance data, secrets, and connection strings. No exporter is required or enabled for normal execution; a deployment can subscribe to the standard source and meter with its chosen OpenTelemetry exporter without changing application behavior.
+
 ### MCP adapter and typed client
 
 `IMcpToolAdapter` hides the MCP SDK from agents. `McpToolAdapter` uses the SDK. `IFinanceMcpClient` gives Sales and Forecasting strongly typed business operations instead of raw JSON or arbitrary tool calls.

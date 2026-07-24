@@ -5,6 +5,8 @@ using CfoAgent.Api.Agents;
 using CfoAgent.Api.Agents.Contracts;
 using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Rag.Retrieval;
+using CfoAgent.Api.Observability;
+using System.Diagnostics;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.OpenApi;
 
@@ -73,6 +75,10 @@ public static class ChatEndpoints
             !string.IsNullOrWhiteSpace(request.ConversationId),
             request.Message!.Length);
 
+        var telemetry = AgentTelemetry.Start("chat.request");
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
         var result = await orchestrator.HandleAsync(
             new AgentRequest(request.Message!, sessionStore.GetContext(conversationId)),
             httpContext.RequestAborted);
@@ -80,7 +86,19 @@ public static class ChatEndpoints
         sessionStore.Record(conversationId, result);
         var model = new ChatModel(aiProvider.ProviderName, aiProvider.ModelName);
 
+        AgentTelemetry.Complete(telemetry, "chat.request", stopwatch, "Success");
         return TypedResults.Ok(ChatResponse.FromAgentResult(result, conversationId, model));
+        }
+        catch (OperationCanceledException) when (httpContext.RequestAborted.IsCancellationRequested)
+        {
+            AgentTelemetry.Complete(telemetry, "chat.request", stopwatch, "Cancelled");
+            throw;
+        }
+        catch
+        {
+            AgentTelemetry.Complete(telemetry, "chat.request", stopwatch, "Failure");
+            throw;
+        }
     }
 
     private static async Task HandleStreamAsync(

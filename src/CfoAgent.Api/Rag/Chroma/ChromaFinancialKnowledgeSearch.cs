@@ -2,6 +2,8 @@ using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Rag.Retrieval;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
+using System.Diagnostics;
+using CfoAgent.Api.Observability;
 
 namespace CfoAgent.Api.Rag.Chroma;
 
@@ -23,9 +25,14 @@ public sealed class ChromaFinancialKnowledgeSearch(
             throw new ArgumentOutOfRangeException(nameof(query), "TopK must be between 1 and 10.");
         }
 
+        var telemetry = AgentTelemetry.Start("chromadb.retrieval", agent: "FinancialKnowledgeAgent");
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
         var collection = await chromaClient.GetCollectionAsync(cancellationToken: cancellationToken);
         if (collection is null)
         {
+            AgentTelemetry.Complete(telemetry, "chromadb.retrieval", stopwatch, "Success", "FinancialKnowledgeAgent");
             return Insufficient("No financial knowledge has been ingested.");
         }
 
@@ -49,9 +56,22 @@ public sealed class ChromaFinancialKnowledgeSearch(
             .Select(group => group.First())
             .ToArray();
 
-        return sources.Length == 0
+        var result = sources.Length == 0
             ? Insufficient("No sufficiently relevant financial knowledge was found.")
             : new FinancialKnowledgeRetrievalResult(sources, Array.Empty<string>());
+        AgentTelemetry.Complete(telemetry, "chromadb.retrieval", stopwatch, "Success", "FinancialKnowledgeAgent");
+        return result;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            AgentTelemetry.Complete(telemetry, "chromadb.retrieval", stopwatch, "Cancelled", "FinancialKnowledgeAgent");
+            throw;
+        }
+        catch
+        {
+            AgentTelemetry.Complete(telemetry, "chromadb.retrieval", stopwatch, "Failure", "FinancialKnowledgeAgent");
+            throw;
+        }
     }
 
     private static FinancialKnowledgeSource? MapSource(ChromaQueryMatch match)
