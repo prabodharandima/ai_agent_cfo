@@ -26,7 +26,7 @@ public sealed class CfoOrchestratorAgentTests
         using var client = CreateClient();
         var orchestrator = new CfoOrchestratorAgent(null!, null!, null!, new AgentResultComposer(), client);
 
-        var intent = await orchestrator.ClassifyAsync(prompt);
+        var intent = await orchestrator.ClassifyAsync(new AgentRequest(prompt));
 
         Assert.Equal(expected, intent);
     }
@@ -46,8 +46,8 @@ public sealed class CfoOrchestratorAgentTests
         var testOrchestrator = new CfoOrchestratorAgent(null!, null!, null!, new AgentResultComposer(), testClient);
         var fallbackOrchestrator = new CfoOrchestratorAgent(null!, null!, null!, new AgentResultComposer(), fallbackClient);
 
-        var testIntent = await testOrchestrator.ClassifyAsync(prompt);
-        var fallbackIntent = await fallbackOrchestrator.ClassifyAsync(prompt);
+        var testIntent = await testOrchestrator.ClassifyAsync(new AgentRequest(prompt));
+        var fallbackIntent = await fallbackOrchestrator.ClassifyAsync(new AgentRequest(prompt));
 
         Assert.Equal(expected, testIntent);
         Assert.Equal(testIntent, fallbackIntent);
@@ -62,7 +62,7 @@ public sealed class CfoOrchestratorAgentTests
         using var client = new InvalidClassificationChatClient("Unsupported");
         var orchestrator = new CfoOrchestratorAgent(null!, null!, null!, new AgentResultComposer(), client);
 
-        var intent = await orchestrator.ClassifyAsync(prompt);
+        var intent = await orchestrator.ClassifyAsync(new AgentRequest(prompt));
 
         Assert.Equal(CfoIntent.Knowledge, intent);
     }

@@ -23,7 +23,8 @@ public sealed class ForecastingAgent(
 
         try
         {
-            var forecast = await GetForecastAsync(cancellationToken);
+            var historical = await financeMcpClient.GetHistoricalYearlyTotalsAsync(cancellationToken);
+            var forecast = salesForecastingService.Forecast(historical);
             var response = await chatClient.GetResponseAsync(
                 [new ChatMessage(ChatRole.User, AgentPromptTemplates.ForForecast(forecast))],
                 new ChatOptions { Instructions = AgentDefinitions.Forecasting.SystemInstructions },
@@ -55,12 +56,6 @@ public sealed class ForecastingAgent(
         {
             throw new InvalidOperationException("The forecasting agent could not produce a forecast.", exception);
         }
-    }
-
-    private async Task<SalesForecastResult> GetForecastAsync(CancellationToken cancellationToken)
-    {
-        var historical = await financeMcpClient.GetHistoricalYearlyTotalsAsync(cancellationToken);
-        return salesForecastingService.Forecast(historical);
     }
 
     private static AgentDataPeriod? ToDataPeriod(SalesForecastResult forecast)

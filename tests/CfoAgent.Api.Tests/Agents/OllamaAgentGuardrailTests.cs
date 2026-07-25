@@ -103,7 +103,7 @@ public sealed class OllamaAgentGuardrailTests
             new AgentResultComposer(),
             fakeClient);
 
-        var intent = await orchestrator.ClassifyAsync(prompt);
+        var intent = await orchestrator.ClassifyAsync(new AgentRequest(prompt));
 
         Assert.Equal(expected, intent);
     }

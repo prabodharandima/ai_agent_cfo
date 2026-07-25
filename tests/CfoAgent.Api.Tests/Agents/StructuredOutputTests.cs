@@ -24,7 +24,7 @@ public sealed class StructuredOutputTests
         });
         var orchestrator = new CfoOrchestratorAgent(null!, null!, null!, new AgentResultComposer(), client);
 
-        var intent = await orchestrator.ClassifyAsync("What documented risks should leadership review?");
+        var intent = await orchestrator.ClassifyAsync(new AgentRequest("What documented risks should leadership review?"));
 
         Assert.Equal(CfoIntent.Knowledge, intent);
         Assert.True(responseFormatSeen);
@@ -36,7 +36,7 @@ public sealed class StructuredOutputTests
         using var client = new TestChatClient((_, _, _) => Task.FromResult("{not-json}"));
         var orchestrator = new CfoOrchestratorAgent(null!, null!, null!, new AgentResultComposer(), client);
 
-        var intent = await orchestrator.ClassifyAsync("Show the top products this month.");
+        var intent = await orchestrator.ClassifyAsync(new AgentRequest("Show the top products this month."));
 
         Assert.Equal(CfoIntent.TopProducts, intent);
     }

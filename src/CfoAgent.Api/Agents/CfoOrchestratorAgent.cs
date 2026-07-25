@@ -23,9 +23,6 @@ public sealed class CfoOrchestratorAgent(
     private static readonly JsonSerializerOptions StructuredOutputJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly ILogger<CfoOrchestratorAgent> _logger = logger ?? NullLogger<CfoOrchestratorAgent>.Instance;
 
-    public Task<CfoIntent> ClassifyAsync(string message, CancellationToken cancellationToken = default) =>
-        ClassifyAsync(new AgentRequest(message), cancellationToken);
-
     public async Task<CfoIntent> ClassifyAsync(AgentRequest request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
