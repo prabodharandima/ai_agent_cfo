@@ -35,23 +35,23 @@ public sealed class CfoOrchestratorAgent(
         var stopwatch = Stopwatch.StartNew();
         try
         {
-        var response = await chatClient.GetResponseAsync(
-            [new ChatMessage(ChatRole.User, AgentPromptTemplates.ForClassification(request.Message, request.SessionContext))],
-            new ChatOptions
-            {
-                Instructions = AgentDefinitions.CfoOrchestrator.SystemInstructions,
-                ResponseFormat = ChatResponseFormat.ForJsonSchema<IntentClassificationOutput>(
-                    StructuredOutputJsonOptions,
-                    "cfo_intent_classification",
-                    "A validated CFO request intent.")
-            },
-            cancellationToken);
+            var response = await chatClient.GetResponseAsync(
+                [new ChatMessage(ChatRole.User, AgentPromptTemplates.ForClassification(request.Message, request.SessionContext))],
+                new ChatOptions
+                {
+                    Instructions = AgentDefinitions.CfoOrchestrator.SystemInstructions,
+                    ResponseFormat = ChatResponseFormat.ForJsonSchema<IntentClassificationOutput>(
+                        StructuredOutputJsonOptions,
+                        "cfo_intent_classification",
+                        "A validated CFO request intent.")
+                },
+                cancellationToken);
 
-        var intent = TryParseStructuredIntent(response.Text, out var parsedIntent) && parsedIntent != CfoIntent.Unsupported
-            ? parsedIntent
-            : ClassifyDeterministically(request.Message);
-        AgentTelemetry.Complete(telemetry, "intent.classification", stopwatch, "Success", AgentDefinitions.CfoOrchestrator.Name);
-        return intent;
+            var intent = TryParseStructuredIntent(response.Text, out var parsedIntent) && parsedIntent != CfoIntent.Unsupported
+                ? parsedIntent
+                : ClassifyDeterministically(request.Message);
+            AgentTelemetry.Complete(telemetry, "intent.classification", stopwatch, "Success", AgentDefinitions.CfoOrchestrator.Name);
+            return intent;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
