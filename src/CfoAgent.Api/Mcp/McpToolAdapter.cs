@@ -217,36 +217,36 @@ public sealed class McpToolAdapter : IMcpToolAdapter, IAsyncDisposable
         var operationName = string.Equals(dependencyName, "Finance MCP", StringComparison.Ordinal)
             ? "finance-mcp.operation"
             : "knowledge-mcp.operation";
-        var telemetry = AgentTelemetry.Start(operationName);
+        var activity = AgentActivityTracing.Start(operationName);
         var stopwatch = Stopwatch.StartNew();
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(timeout);
         try
         {
             var result = await operation(timeoutSource.Token);
-            AgentTelemetry.Complete(telemetry, operationName, stopwatch, "Success");
+            AgentActivityTracing.Complete(activity, operationName, stopwatch, "Success");
             return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            AgentTelemetry.Complete(telemetry, operationName, stopwatch, "Cancelled");
+            AgentActivityTracing.Complete(activity, operationName, stopwatch, "Cancelled");
             throw;
         }
         catch (OperationCanceledException exception)
         {
             await ResetConnectionAsync();
-            AgentTelemetry.Complete(telemetry, operationName, stopwatch, "Failure");
+            AgentActivityTracing.Complete(activity, operationName, stopwatch, "Failure");
             throw new McpDependencyException(dependencyName, McpDependencyFailureKind.Timeout, exception);
         }
         catch (McpDependencyException)
         {
-            AgentTelemetry.Complete(telemetry, operationName, stopwatch, "Failure");
+            AgentActivityTracing.Complete(activity, operationName, stopwatch, "Failure");
             throw;
         }
         catch (Exception exception)
         {
             await ResetConnectionAsync();
-            AgentTelemetry.Complete(telemetry, operationName, stopwatch, "Failure");
+            AgentActivityTracing.Complete(activity, operationName, stopwatch, "Failure");
             throw new McpDependencyException(dependencyName, McpDependencyFailureKind.Unavailable, exception);
         }
     }

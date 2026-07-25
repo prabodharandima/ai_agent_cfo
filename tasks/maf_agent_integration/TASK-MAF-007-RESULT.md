@@ -7,7 +7,7 @@
 
 ## Files Changed
 
-- `src/CfoAgent.Api/Observability/AgentTelemetry.cs`
+- `src/CfoAgent.Api/Observability/AgentActivityTracing.cs` (renamed)
 - `src/CfoAgent.Api/AI/AgentChatMiddleware.cs`
 - `src/CfoAgent.Api/Agents/CfoOrchestratorAgent.cs`
 - `src/CfoAgent.Api/Mcp/McpToolAdapter.cs`

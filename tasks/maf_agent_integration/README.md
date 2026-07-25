@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-This task pack is **complete**. `CfoAgent.Api` uses `Microsoft.Agents.AI` 1.13.0 with `Microsoft.Extensions.AI.Abstractions` 10.8.0 on `net10.0`. The verified integration is deliberately bounded: `AgentChatMiddleware` wraps the existing `IChatClient`; structured output is limited to intent classification and sales-summary date ranges; `POST /api/chat/stream` is a separate compatible SSE endpoint; sessions retain bounded metadata only; `FinancialKnowledgeContextProvider` prepares bounded transient RAG context; and `AgentTelemetry` exposes safe OpenTelemetry-compatible signals.
+This task pack is **complete**. `CfoAgent.Api` uses `Microsoft.Agents.AI` 1.13.0 with `Microsoft.Extensions.AI.Abstractions` 10.8.0 on `net10.0`. The verified integration is deliberately bounded: `AgentChatMiddleware` wraps the existing `IChatClient`; structured output is limited to intent classification and sales-summary date ranges; `POST /api/chat/stream` is a separate compatible SSE endpoint; sessions retain bounded metadata only; `FinancialKnowledgeContextProvider` prepares bounded transient RAG context; and `AgentActivityTracing` exposes safe OpenTelemetry-compatible signals.
 
 The integration does not change the authoritative architecture. `CfoAgent.Api` remains the business orchestrator; typed MCP facades and allow-lists retain deterministic Finance tool routing; ChromaDB remains the semantic retrieval and citation source; and deterministic C# and SQL calculations remain authoritative. Normal tests use test-local `IChatClient` doubles and do not require live Ollama.
 

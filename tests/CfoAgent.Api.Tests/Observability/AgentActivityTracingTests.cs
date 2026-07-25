@@ -4,7 +4,7 @@ using CfoAgent.Api.Observability;
 
 namespace CfoAgent.Api.Tests.Observability;
 
-public sealed class AgentTelemetryTests
+public sealed class AgentActivityTracingTests
 {
     [Fact]
     public void Complete_RecordsOnlySafeSuccessAttributes()
@@ -13,9 +13,9 @@ public sealed class AgentTelemetryTests
         using var listener = capture.Listener;
         var stopped = capture.Stopped;
         var stopwatch = Stopwatch.StartNew();
-        var activity = AgentTelemetry.Start("llm.request", provider: "Ollama", model: "llama3.2:3b");
+        var activity = AgentActivityTracing.Start("llm.request", provider: "Ollama", model: "llama3.2:3b");
 
-        AgentTelemetry.Complete(activity, "llm.request", stopwatch, "Success", provider: "Ollama", model: "llama3.2:3b");
+        AgentActivityTracing.Complete(activity, "llm.request", stopwatch, "Success", provider: "Ollama", model: "llama3.2:3b");
 
         var span = Assert.Single(stopped.Where(activity => activity.OperationName == "llm.request").ToArray());
         Assert.Equal("llm.request", span.OperationName);
@@ -33,9 +33,9 @@ public sealed class AgentTelemetryTests
         var capture = Listen();
         using var listener = capture.Listener;
         var stopped = capture.Stopped;
-        var activity = AgentTelemetry.Start("finance-mcp.operation");
+        var activity = AgentActivityTracing.Start("finance-mcp.operation");
 
-        AgentTelemetry.Complete(activity, "finance-mcp.operation", Stopwatch.StartNew(), "Failure");
+        AgentActivityTracing.Complete(activity, "finance-mcp.operation", Stopwatch.StartNew(), "Failure");
 
         var span = Assert.Single(stopped.Where(activity => activity.OperationName == "finance-mcp.operation").ToArray());
         Assert.Equal(ActivityStatusCode.Error, span.Status);
@@ -49,9 +49,9 @@ public sealed class AgentTelemetryTests
         var capture = Listen();
         using var listener = capture.Listener;
         var stopped = capture.Stopped;
-        var activity = AgentTelemetry.Start("chromadb.retrieval", agent: "FinancialKnowledgeAgent");
+        var activity = AgentActivityTracing.Start("chromadb.retrieval", agent: "FinancialKnowledgeAgent");
 
-        AgentTelemetry.Complete(activity, "chromadb.retrieval", Stopwatch.StartNew(), "Cancelled", "FinancialKnowledgeAgent");
+        AgentActivityTracing.Complete(activity, "chromadb.retrieval", Stopwatch.StartNew(), "Cancelled", "FinancialKnowledgeAgent");
 
         var span = Assert.Single(stopped.Where(activity => activity.OperationName == "chromadb.retrieval").ToArray());
         Assert.Equal("Cancelled", span.GetTagItem("cfo.outcome"));
@@ -63,7 +63,7 @@ public sealed class AgentTelemetryTests
         var stopped = new ConcurrentQueue<Activity>();
         var listener = new ActivityListener
         {
-            ShouldListenTo = source => source.Name == AgentTelemetry.ActivitySourceName,
+            ShouldListenTo = source => source.Name == AgentActivityTracing.ActivitySourceName,
             Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
             ActivityStopped = activity => stopped.Enqueue(activity)
         };

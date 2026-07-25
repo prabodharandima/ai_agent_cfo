@@ -3,7 +3,7 @@ using System.Diagnostics.Metrics;
 
 namespace CfoAgent.Api.Observability;
 
-public static class AgentTelemetry
+public static class AgentActivityTracing
 {
     public const string ActivitySourceName = "CfoAgent.Api.Agent";
     public const string MeterName = "CfoAgent.Api.Agent";

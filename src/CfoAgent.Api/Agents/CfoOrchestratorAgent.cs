@@ -28,7 +28,7 @@ public sealed class CfoOrchestratorAgent(
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Message);
 
-        var telemetry = AgentTelemetry.Start("intent.classification", agent: AgentDefinitions.CfoOrchestrator.Name);
+        var activity = AgentActivityTracing.Start("intent.classification", agent: AgentDefinitions.CfoOrchestrator.Name);
         var stopwatch = Stopwatch.StartNew();
         try
         {
@@ -47,17 +47,17 @@ public sealed class CfoOrchestratorAgent(
             var intent = TryParseStructuredIntent(response.Text, out var parsedIntent) && parsedIntent != CfoIntent.Unsupported
                 ? parsedIntent
                 : ClassifyDeterministically(request.Message);
-            AgentTelemetry.Complete(telemetry, "intent.classification", stopwatch, "Success", AgentDefinitions.CfoOrchestrator.Name);
+            AgentActivityTracing.Complete(activity, "intent.classification", stopwatch, "Success", AgentDefinitions.CfoOrchestrator.Name);
             return intent;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            AgentTelemetry.Complete(telemetry, "intent.classification", stopwatch, "Cancelled", AgentDefinitions.CfoOrchestrator.Name);
+            AgentActivityTracing.Complete(activity, "intent.classification", stopwatch, "Cancelled", AgentDefinitions.CfoOrchestrator.Name);
             throw;
         }
         catch
         {
-            AgentTelemetry.Complete(telemetry, "intent.classification", stopwatch, "Failure", AgentDefinitions.CfoOrchestrator.Name);
+            AgentActivityTracing.Complete(activity, "intent.classification", stopwatch, "Failure", AgentDefinitions.CfoOrchestrator.Name);
             throw;
         }
     }
@@ -94,17 +94,17 @@ public sealed class CfoOrchestratorAgent(
                 _ => Array.Empty<AgentResult>()
             };
 
-            var compositionTelemetry = AgentTelemetry.Start("result.composition", AgentDefinitions.CfoOrchestrator.Name);
+            var compositionActivity = AgentActivityTracing.Start("result.composition", AgentDefinitions.CfoOrchestrator.Name);
             var compositionStopwatch = Stopwatch.StartNew();
             AgentResult result;
             try
             {
                 result = specialistResults.Length == 0 ? UnsupportedResult() : resultComposer.Compose(specialistResults);
-                AgentTelemetry.Complete(compositionTelemetry, "result.composition", compositionStopwatch, "Success", AgentDefinitions.CfoOrchestrator.Name);
+                AgentActivityTracing.Complete(compositionActivity, "result.composition", compositionStopwatch, "Success", AgentDefinitions.CfoOrchestrator.Name);
             }
             catch
             {
-                AgentTelemetry.Complete(compositionTelemetry, "result.composition", compositionStopwatch, "Failure", AgentDefinitions.CfoOrchestrator.Name);
+                AgentActivityTracing.Complete(compositionActivity, "result.composition", compositionStopwatch, "Failure", AgentDefinitions.CfoOrchestrator.Name);
                 throw;
             }
 
@@ -180,22 +180,22 @@ public sealed class CfoOrchestratorAgent(
 
     private static async Task<AgentResult> ExecuteSpecialistAsync(string agentName, Func<Task<AgentResult>> operation, CancellationToken cancellationToken)
     {
-        var telemetry = AgentTelemetry.Start("specialist.execution", agentName);
+        var activity = AgentActivityTracing.Start("specialist.execution", agentName);
         var stopwatch = Stopwatch.StartNew();
         try
         {
             var result = await operation();
-            AgentTelemetry.Complete(telemetry, "specialist.execution", stopwatch, "Success", agentName);
+            AgentActivityTracing.Complete(activity, "specialist.execution", stopwatch, "Success", agentName);
             return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            AgentTelemetry.Complete(telemetry, "specialist.execution", stopwatch, "Cancelled", agentName);
+            AgentActivityTracing.Complete(activity, "specialist.execution", stopwatch, "Cancelled", agentName);
             throw;
         }
         catch
         {
-            AgentTelemetry.Complete(telemetry, "specialist.execution", stopwatch, "Failure", agentName);
+            AgentActivityTracing.Complete(activity, "specialist.execution", stopwatch, "Failure", agentName);
             throw;
         }
     }

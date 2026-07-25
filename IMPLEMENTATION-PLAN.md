@@ -33,7 +33,7 @@ The current Streamable HTTP clients use one minimal generic `McpToolAdapter` for
 3. `POST /api/chat/stream` is an optional SSE endpoint; `POST /api/chat` and its JSON contract remain unchanged.
 4. `InMemoryAgentSessionStore` keeps bounded response metadata and optional date periods per conversation ID. It never stores prompts, answers, raw RAG content, or MCP data.
 5. `FinancialKnowledgeContextProvider` prepares bounded transient RAG context, retains citations and duplicate control, and treats retrieved text as untrusted.
-6. `AgentTelemetry` publishes safe OpenTelemetry-compatible activities and metrics without requiring an exporter.
+6. `AgentActivityTracing` publishes safe OpenTelemetry-compatible activities and metrics without requiring an exporter.
 
 Normal automated tests use test-local `IChatClient` doubles. Live Ollama tests remain opt-in. The completed task records are under `tasks/maf_agent_integration/`.
 
