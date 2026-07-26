@@ -106,6 +106,21 @@ services:
       start_period: 15s
     restart: unless-stopped
 
+  redis:
+    image: redis:8.2-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    expose:
+      - "6379"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
   rag-init:
     image: cfo-agent-api:local
     build:
@@ -121,6 +136,7 @@ services:
       AI__Ollama__Temperature: ${OLLAMA_TEMPERATURE:?Set OLLAMA_TEMPERATURE in .env}
       AI__Ollama__ContextLength: ${OLLAMA_CONTEXT_LENGTH:?Set OLLAMA_CONTEXT_LENGTH in .env}
       AI__Ollama__MaxOutputTokens: ${OLLAMA_MAX_OUTPUT_TOKENS:?Set OLLAMA_MAX_OUTPUT_TOKENS in .env}
+      Cache__Enabled: "false"
       Chroma__BaseUrl: ${CHROMA_BASE_URL:?Set CHROMA_BASE_URL in .env}
       Chroma__CollectionName: ${CHROMA_COLLECTION_NAME:?Set CHROMA_COLLECTION_NAME in .env}
       Chroma__Tenant: ${CHROMA_TENANT:?Set CHROMA_TENANT in .env}
@@ -160,6 +176,15 @@ services:
       AI__Ollama__Temperature: ${OLLAMA_TEMPERATURE:?Set OLLAMA_TEMPERATURE in .env}
       AI__Ollama__ContextLength: ${OLLAMA_CONTEXT_LENGTH:?Set OLLAMA_CONTEXT_LENGTH in .env}
       AI__Ollama__MaxOutputTokens: ${OLLAMA_MAX_OUTPUT_TOKENS:?Set OLLAMA_MAX_OUTPUT_TOKENS in .env}
+      Cache__Enabled: ${CACHE_ENABLED:?Set CACHE_ENABLED in .env}
+      Cache__UseDistributedCache: ${CACHE_USE_DISTRIBUTED_CACHE:?Set CACHE_USE_DISTRIBUTED_CACHE in .env}
+      Cache__Finance__SalesSummaryTtlSeconds: ${CACHE_FINANCE_SALES_SUMMARY_TTL_SECONDS:?Set CACHE_FINANCE_SALES_SUMMARY_TTL_SECONDS in .env}
+      Cache__Finance__CurrentWeekSummaryTtlSeconds: ${CACHE_FINANCE_CURRENT_WEEK_SUMMARY_TTL_SECONDS:?Set CACHE_FINANCE_CURRENT_WEEK_SUMMARY_TTL_SECONDS in .env}
+      Cache__Finance__WeekOverWeekComparisonTtlSeconds: ${CACHE_FINANCE_WEEK_OVER_WEEK_COMPARISON_TTL_SECONDS:?Set CACHE_FINANCE_WEEK_OVER_WEEK_COMPARISON_TTL_SECONDS in .env}
+      Cache__Finance__CurrentMonthTopProductsTtlSeconds: ${CACHE_FINANCE_CURRENT_MONTH_TOP_PRODUCTS_TTL_SECONDS:?Set CACHE_FINANCE_CURRENT_MONTH_TOP_PRODUCTS_TTL_SECONDS in .env}
+      Cache__Finance__HistoricalYearlyTotalsTtlSeconds: ${CACHE_FINANCE_HISTORICAL_YEARLY_TOTALS_TTL_SECONDS:?Set CACHE_FINANCE_HISTORICAL_YEARLY_TOTALS_TTL_SECONDS in .env}
+      Cache__Finance__BudgetTargetTtlSeconds: ${CACHE_FINANCE_BUDGET_TARGET_TTL_SECONDS:?Set CACHE_FINANCE_BUDGET_TARGET_TTL_SECONDS in .env}
+      ConnectionStrings__Redis: ${CACHE_REDIS_CONNECTION_STRING:?Set CACHE_REDIS_CONNECTION_STRING in .env}
       Chroma__BaseUrl: ${CHROMA_BASE_URL:?Set CHROMA_BASE_URL in .env}
       Chroma__CollectionName: ${CHROMA_COLLECTION_NAME:?Set CHROMA_COLLECTION_NAME in .env}
       Chroma__Tenant: ${CHROMA_TENANT:?Set CHROMA_TENANT in .env}

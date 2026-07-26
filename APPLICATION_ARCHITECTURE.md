@@ -44,17 +44,18 @@ The LLM does not choose the database, MCP server, MCP tool, or financial calcula
 
 ## 3. Main building blocks
 
-| Building block     | What it does                                                                                                                          | Relationship to `CfoAgent.Api`                                                         |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| React frontend     | Collects questions and displays answers, structured values, warnings, and citations                                                   | Sends `POST /api/chat`; Nginx proxies `/api/` to the API in Docker                     |
-| `CfoAgent.Api`     | Validates requests, classifies intent, routes work, calls integrations, calculates forecasts, composes results, and translates errors | Main business and orchestration application                                            |
-| Finance MCP        | Offers five read-only finance tools over MCP                                                                                          | API calls it through `FinanceMcpClient` and `McpToolAdapter`                           |
-| Knowledge File MCP | Offers two restricted read-only file tools                                                                                            | API registers clients and checks readiness; current knowledge chat does not call it    |
-| RAG initializer    | One-shot `CfoAgent.Api --ingest-rag` process that reads Markdown and loads ChromaDB                                                   | Runs before the API container starts; it is not a chat request                         |
-| ChromaDB           | Stores and searches indexed finance-document chunks                                                                                   | `FinancialKnowledgeAgent` reaches it through `IFinancialKnowledgeSearch`               |
-| PostgreSQL         | Stores products, sales, and budget targets                                                                                            | Owned and accessed only by Finance MCP                                                 |
-| Ollama             | Local language model running on Windows                                                                                               | The only runtime `IChatClient`; API containers reach it through `host.docker.internal` |
-| pgAdmin            | Optional browser administration tool for PostgreSQL                                                                                   | Operational tool only; not part of an application request                              |
+| Building block | What it does | Relationship to `CfoAgent.Api` |
+|---|---|---|
+| React frontend | Collects questions and displays answers, structured values, warnings, and citations | Sends `POST /api/chat`; Nginx proxies `/api/` to the API in Docker |
+| `CfoAgent.Api` | Validates requests, classifies intent, routes work, calls integrations, calculates forecasts, composes results, and translates errors | Main business and orchestration application |
+| Finance MCP | Offers five read-only finance tools over MCP | API calls it through `FinanceMcpClient` and `McpToolAdapter` |
+| Knowledge File MCP | Offers two restricted read-only file tools | API registers clients and checks readiness; current knowledge chat does not call it |
+| RAG initializer | One-shot `CfoAgent.Api --ingest-rag` process that reads Markdown and loads ChromaDB | Runs before the API container starts; it is not a chat request |
+| ChromaDB | Stores and searches indexed finance-document chunks | `FinancialKnowledgeAgent` reaches it through `IFinancialKnowledgeSearch` |
+| Redis | Optional distributed backing store for finance read-result caching | Reached only through HybridCache; it is not a source of truth |
+| PostgreSQL | Stores products, sales, and budget targets | Owned and accessed only by Finance MCP |
+| Ollama | Local language model running on Windows | The only runtime `IChatClient`; API containers reach it through `host.docker.internal` |
+| pgAdmin | Optional browser administration tool for PostgreSQL | Operational tool only; not part of an application request |
 
 ```mermaid
 flowchart LR
@@ -65,6 +66,7 @@ flowchart LR
     Finance --> PG[(PostgreSQL)]
 
     API -->|HTTP vector query| Chroma[(ChromaDB)]
+    API -->|optional cache| Redis[(Redis)]
     API -. restricted file operations and readiness .-> Knowledge[Knowledge File MCP]
     Knowledge --> Files[data/knowledge read-only]
     Files -->|read-only ingestion mount| RagInit[CfoAgent.Api --ingest-rag]
@@ -101,7 +103,7 @@ The selected specialist determines the dependency:
 
 ### Call MCP tools
 
-`FinanceMcpClient` chooses a fixed tool for each typed finance operation and builds canonical arguments. `McpToolAdapter` owns the MCP SDK connection, discovery, allow-list filtering, cache, and call. Source: `src/CfoAgent.Api/Mcp`.
+`CachedFinanceMcpClient` decorates the typed finance port and caches successful read results using deterministic argument-based keys. On a miss or cache failure, `FinanceMcpClient` chooses a fixed tool and builds canonical arguments. `McpToolAdapter` owns the MCP SDK connection, discovery, allow-list filtering, tool-metadata cache, and call. Source: `src/CfoAgent.Api/Caching` and `src/CfoAgent.Api/Mcp`.
 
 ### Call vector search
 
@@ -181,6 +183,10 @@ flowchart TB
     ChatMiddleware[AgentChatMiddleware]
     Ollama[OllamaChatClient]
     FinanceClient[FinanceMcpClient]
+    FinanceCache[CachedFinanceMcpClient]
+    AppCache[IApplicationCache]
+    HybridCache[HybridApplicationCache]
+    Redis[(Redis optional)]
     McpAdapter[McpToolAdapter]
     ChromaAdapter[ChromaFinancialKnowledgeSearch]
     ChromaClient[ChromaClient]
@@ -201,7 +207,10 @@ flowchart TB
     Knowledge --> VectorPort
 
     ChatPort --> ChatMiddleware --> Ollama
-    FinancePort --> FinanceClient --> McpAdapter
+    FinancePort --> FinanceCache
+    FinanceCache --> AppCache --> HybridCache
+    HybridCache -. distributed mode .-> Redis
+    FinanceCache --> FinanceClient --> McpAdapter
     VectorPort --> ChromaAdapter --> ChromaClient
 ```
 
@@ -240,6 +249,14 @@ Before it is injected into agents, `Program.cs` wraps the client with `AgentChat
 ### MCP adapter and typed client
 
 `IMcpToolAdapter` hides the MCP SDK from agents. `McpToolAdapter` uses the SDK. `IFinanceMcpClient` gives Sales and Forecasting strongly typed business operations instead of raw JSON or arbitrary tool calls.
+
+### Application cache
+
+`IApplicationCache` is the provider-neutral cache port. `HybridApplicationCache` implements it with HybridCache. `CachedFinanceMcpClient` decorates all six typed finance reads: arbitrary-period summary, current-week summary, week comparison, current-month top products, historical yearly totals, and budget target.
+
+Keys contain only a version, operation, canonical date or year/month arguments, and the injected current date where an operation is relative to "now." They never contain prompts, secrets, or finance response data. Successful values use operation-specific TTLs. Exceptions and cancellation are rethrown and are not cached. If the cache itself fails, the adapter logs the failure category and calls Finance MCP, which remains authoritative.
+
+With `Cache:Enabled=false`, the adapter bypasses HybridCache. With caching enabled and `Cache:UseDistributedCache=false`, it uses only process-local memory. Compose enables the Redis backing store. Redis has no persistence or application-data volume and is not an API startup or health dependency.
 
 ### Vector-search adapter
 
@@ -958,38 +975,38 @@ Docker Compose reads root `.env` values and maps them to .NET options. Direct `d
 
 The local and container defaults are intentionally different. Local `appsettings.json` enables Finance MCP at `http://localhost:5081` and disables Knowledge MCP. Compose enables both MCP services at Docker DNS addresses and disables the Knowledge local fallback. Both modes use Ollama.
 
-| Setting                                                                                        | Purpose                                                             | Example                              | Used by                                  | Required behavior                                                                |
-| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------ | ---------------------------------------- | -------------------------------------------------------------------------------- |
-| `AI:Provider` / `AI_PROVIDER`                                                                  | Selected registered provider                                        | `Ollama`                             | Composition root, response metadata      | Required; currently `Ollama` only                                                |
-| `AI:Ollama:Model` / `OLLAMA_MODEL`                                                             | Ollama model name                                                   | `llama3.2:3b`                        | Ollama adapter and dynamic chat metadata | Nonblank                                                                         |
-| `AI:Ollama:BaseUrl` / `OLLAMA_BASE_URL`                                                        | Ollama endpoint                                                     | `http://host.docker.internal:11434`  | Ollama HTTP client                       | Absolute HTTP URL                                                                |
-| `AI:Ollama:TimeoutSeconds` / `OLLAMA_TIMEOUT_SECONDS`                                          | LLM operation timeout                                               | `120`                                | Ollama adapter/client                    | 1 through 600                                                                    |
-| `AI:Ollama:Temperature` / `OLLAMA_TEMPERATURE`                                                 | Ollama sampling variability                                         | `0`                                  | Ollama request                           | 0 through 2                                                                      |
-| `AI:Ollama:ContextLength` / `OLLAMA_CONTEXT_LENGTH`                                            | Ollama context size                                                 | `4096`                               | Ollama request                           | 1,024 through 32,768                                                             |
-| `AI:Ollama:MaxOutputTokens` / `OLLAMA_MAX_OUTPUT_TOKENS`                                       | Maximum completion size                                             | `512`                                | Ollama request                           | 1 through 1,024 and below context length                                         |
-| `AgentMiddleware:PromptInjectionCheckEnabled` / `AgentMiddleware__PromptInjectionCheckEnabled` | Enable deterministic prompt-risk checks                             | `true`                               | `AgentChatMiddleware`                    | When enabled, requires at least one phrase                                       |
-| `AgentMiddleware:SuspiciousPromptPhrases` / `AgentMiddleware__SuspiciousPromptPhrases__0`      | Phrases that cause a request to be blocked before the provider call | `ignore previous instructions`       | `AgentChatMiddleware`                    | Nonblank and unique, case-insensitively                                          |
-| `AgentSessions:MessageLimit` / `AgentSessions__MessageLimit`                                   | Most recent resolved turns retained per in-memory conversation      | `8`                                  | `InMemoryAgentSessionStore`              | 1 through 100                                                                    |
-| `AgentSessions:ExpirationMinutes` / `AgentSessions__ExpirationMinutes`                         | Sliding inactivity expiry for an in-memory conversation             | `30`                                 | `InMemoryAgentSessionStore`              | 1 through 1,440                                                                  |
-| `AgentSessions:MaximumSessions` / `AgentSessions__MaximumSessions`                             | Maximum conversation entries in one API process                     | `1000`                               | `InMemoryAgentSessionStore`              | 1 through 10,000                                                                 |
-| `Mcp:Finance:Enabled`                                                                          | Enable required Finance MCP                                         | `true`                               | Finance adapter/readiness                | Finance readiness is unhealthy when false                                        |
-| `Mcp:Finance:BaseUrl` / `FINANCE_MCP_BASE_URL`                                                 | Finance MCP service address                                         | `http://finance-mcp:8080`            | Finance keyed adapter                    | Absolute HTTP URL when enabled                                                   |
-| `Mcp:Finance:TimeoutSeconds`                                                                   | Finance MCP timeout                                                 | `10`                                 | Finance keyed adapter                    | Positive                                                                         |
-| `Mcp:Finance:AllowedToolNames`                                                                 | Finance security allow-list                                         | Five committed tool names            | MCP adapter                              | Unique, nonblank, non-empty when enabled                                         |
-| `Mcp:KnowledgeFiles:Enabled`                                                                   | Enable Knowledge MCP                                                | `true` in Compose                    | Knowledge adapter/readiness              | Controls remote client use                                                       |
-| `Mcp:KnowledgeFiles:BaseUrl` / `KNOWLEDGE_MCP_BASE_URL`                                        | Knowledge MCP address                                               | `http://knowledge-mcp:8080`          | Knowledge keyed adapter                  | Absolute HTTP URL when enabled                                                   |
-| `Mcp:KnowledgeFiles:RootPath`                                                                  | Local fallback/root setting                                         | `/knowledge`                         | Local client and server mapping          | Required for local fallback                                                      |
-| `Mcp:KnowledgeFiles:UseLocalFallback`                                                          | Permit local restricted-file fallback                               | `false`                              | `KnowledgeFileMcpAccess`                 | Allowed only in Development                                                      |
-| `Mcp:KnowledgeFiles:TimeoutSeconds`                                                            | Knowledge operation timeout                                         | `10`                                 | Remote/local knowledge clients           | Positive                                                                         |
-| `Chroma:BaseUrl` / `CHROMA_BASE_URL`                                                           | ChromaDB service address                                            | `http://chromadb:8000`               | Chroma clients/health                    | Absolute URL                                                                     |
-| `Chroma:CollectionName`                                                                        | Vector collection                                                   | `cfo-financial-knowledge`            | Ingestion and search                     | Nonblank                                                                         |
-| `Chroma:Tenant` / `Chroma:Database`                                                            | Chroma API v2 scope                                                 | `default_tenant`, `default_database` | Chroma client                            | Nonblank                                                                         |
-| `Chroma:TimeoutSeconds`                                                                        | Chroma HTTP timeout                                                 | `10`                                 | Chroma clients                           | Positive                                                                         |
-| `Rag:KnowledgeFilesRoot`                                                                       | Markdown source directory                                           | `/knowledge` in Compose              | RAG ingestion                            | Nonblank                                                                         |
-| `Rag:MaxChunkCharacters`                                                                       | Maximum chunk target                                                | `1200`                               | Ingestion                                | At least 256                                                                     |
-| `Rag:ChunkOverlapPercentage` / `RAG_CHUNK_OVERLAP_PERCENTAGE`                                  | Percentage of each chunk repeated at the start of the next chunk    | `15`                                 | RAG ingestion                            | At least 0 and below 100; calculated overlap must be smaller than the chunk size |
-| `Rag:MaxKnowledgeContextCharacters`                                                            | Maximum LLM context built from retrieval                            | `4000`                               | Knowledge agent                          | At least 256                                                                     |
-| `Rag:MaximumRetrievalDistance`                                                                 | Largest accepted Chroma distance                                    | `1.25`                               | Vector-search adapter                    | Nonnegative                                                                      |
+| Setting | Purpose | Example | Used by | Required behavior |
+|---|---|---|---|---|
+| `AI:Provider` / `AI_PROVIDER` | Selected registered provider | `Ollama` | Composition root, response metadata | Required; currently `Ollama` only |
+| `AI:Ollama:Model` / `OLLAMA_MODEL` | Ollama model name | `llama3.2:3b` | Ollama adapter and dynamic chat metadata | Nonblank |
+| `AI:Ollama:BaseUrl` / `OLLAMA_BASE_URL` | Ollama endpoint | `http://host.docker.internal:11434` | Ollama HTTP client | Absolute HTTP URL |
+| `AI:Ollama:TimeoutSeconds` / `OLLAMA_TIMEOUT_SECONDS` | LLM operation timeout | `120` | Ollama adapter/client | 1 through 600 |
+| `AI:Ollama:Temperature` / `OLLAMA_TEMPERATURE` | Ollama sampling variability | `0` | Ollama request | 0 through 2 |
+| `AI:Ollama:ContextLength` / `OLLAMA_CONTEXT_LENGTH` | Ollama context size | `4096` | Ollama request | 1,024 through 32,768 |
+| `AI:Ollama:MaxOutputTokens` / `OLLAMA_MAX_OUTPUT_TOKENS` | Maximum completion size | `512` | Ollama request | 1 through 1,024 and below context length |
+| `AgentMiddleware:PromptInjectionCheckEnabled` / `AgentMiddleware__PromptInjectionCheckEnabled` | Enable deterministic prompt-risk checks | `true` | `AgentChatMiddleware` | When enabled, requires at least one phrase |
+| `AgentMiddleware:SuspiciousPromptPhrases` / `AgentMiddleware__SuspiciousPromptPhrases__0` | Phrases that cause a request to be blocked before the provider call | `ignore previous instructions` | `AgentChatMiddleware` | Nonblank and unique, case-insensitively |
+| `AgentSessions:MessageLimit` / `AgentSessions__MessageLimit` | Most recent resolved turns retained per in-memory conversation | `8` | `InMemoryAgentSessionStore` | 1 through 100 |
+| `AgentSessions:ExpirationMinutes` / `AgentSessions__ExpirationMinutes` | Sliding inactivity expiry for an in-memory conversation | `30` | `InMemoryAgentSessionStore` | 1 through 1,440 |
+| `AgentSessions:MaximumSessions` / `AgentSessions__MaximumSessions` | Maximum conversation entries in one API process | `1000` | `InMemoryAgentSessionStore` | 1 through 10,000 |
+| `Mcp:Finance:Enabled` | Enable required Finance MCP | `true` | Finance adapter/readiness | Finance readiness is unhealthy when false |
+| `Mcp:Finance:BaseUrl` / `FINANCE_MCP_BASE_URL` | Finance MCP service address | `http://finance-mcp:8080` | Finance keyed adapter | Absolute HTTP URL when enabled |
+| `Mcp:Finance:TimeoutSeconds` | Finance MCP timeout | `10` | Finance keyed adapter | Positive |
+| `Mcp:Finance:AllowedToolNames` | Finance security allow-list | Five committed tool names | MCP adapter | Unique, nonblank, non-empty when enabled |
+| `Mcp:KnowledgeFiles:Enabled` | Enable Knowledge MCP | `true` in Compose | Knowledge adapter/readiness | Controls remote client use |
+| `Mcp:KnowledgeFiles:BaseUrl` / `KNOWLEDGE_MCP_BASE_URL` | Knowledge MCP address | `http://knowledge-mcp:8080` | Knowledge keyed adapter | Absolute HTTP URL when enabled |
+| `Mcp:KnowledgeFiles:RootPath` | Local fallback/root setting | `/knowledge` | Local client and server mapping | Required for local fallback |
+| `Mcp:KnowledgeFiles:UseLocalFallback` | Permit local restricted-file fallback | `false` | `KnowledgeFileMcpAccess` | Allowed only in Development |
+| `Mcp:KnowledgeFiles:TimeoutSeconds` | Knowledge operation timeout | `10` | Remote/local knowledge clients | Positive |
+| `Chroma:BaseUrl` / `CHROMA_BASE_URL` | ChromaDB service address | `http://chromadb:8000` | Chroma clients/health | Absolute URL |
+| `Chroma:CollectionName` | Vector collection | `cfo-financial-knowledge` | Ingestion and search | Nonblank |
+| `Chroma:Tenant` / `Chroma:Database` | Chroma API v2 scope | `default_tenant`, `default_database` | Chroma client | Nonblank |
+| `Chroma:TimeoutSeconds` | Chroma HTTP timeout | `10` | Chroma clients | Positive |
+| `Rag:KnowledgeFilesRoot` | Markdown source directory | `/knowledge` in Compose | RAG ingestion | Nonblank |
+| `Rag:MaxChunkCharacters` | Maximum chunk target | `1200` | Ingestion | At least 256 |
+| `Rag:ChunkOverlapPercentage` / `RAG_CHUNK_OVERLAP_PERCENTAGE` | Percentage of each chunk repeated at the start of the next chunk | `15` | RAG ingestion | At least 0 and below 100; calculated overlap must be smaller than the chunk size |
+| `Rag:MaxKnowledgeContextCharacters` | Maximum LLM context built from retrieval | `4000` | Knowledge agent | At least 256 |
+| `Rag:MaximumRetrievalDistance` | Largest accepted Chroma distance | `1.25` | Vector-search adapter | Nonnegative |
 
 PostgreSQL credentials and `ConnectionStrings:FinanceDatabase` are supplied only to Finance MCP and `finance-db-init`. They are deliberately absent from API configuration.
 
@@ -1014,6 +1031,7 @@ flowchart TB
             Knowledge[Knowledge MCP :8080]
             PG[(PostgreSQL :5432)]
             Chroma[(ChromaDB :8000)]
+            Redis[(Redis :6379)]
             PgAdmin[pgAdmin :80]
         end
     end
@@ -1023,6 +1041,7 @@ flowchart TB
     Browser -->|127.0.0.1:5050| PgAdmin
     Frontend -->|same-origin /api| API
     API --> Finance
+    API --> Redis
     API --> Knowledge
     API --> Chroma
     API -->|host.docker.internal| Ollama

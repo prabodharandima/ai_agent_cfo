@@ -39,6 +39,10 @@ Normal automated tests use test-local `IChatClient` doubles. Live Ollama tests r
 
 The following boundaries remain non-negotiable: deterministic C# and SQL finance values, canonical date validation, typed Finance MCP routing and allow-lists, Knowledge MCP filesystem restrictions, ChromaDB retrieval/citations, cancellation propagation, and sanitized dependency failures.
 
+## Caching integration - In progress
+
+Task 1 adds the provider-neutral `IApplicationCache` port, a HybridCache implementation, optional internal Redis backing, and a decorator that caches every typed Finance MCP read with deterministic safe keys and operation-specific TTLs. Local configuration defaults to memory-only caching; Compose enables Redis. Cache failure fails open to Finance MCP, while authoritative failures, timeouts, and caller cancellation are not cached. Later caching tasks remain unimplemented.
+
 ## Validation
 
 Use serialized solution commands:

@@ -2,6 +2,7 @@ using CfoAgent.Api.AI;
 using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents;
+using CfoAgent.Api.Caching;
 using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Features.Forecasting;
 using CfoAgent.Api.Features.Chat;
@@ -84,6 +85,16 @@ builder.Services.AddOptions<AgentSessionOptions>()
     .Validate(options => options.MaximumSessions is > 0 and <= 10_000, "AgentSessions:MaximumSessions must be between 1 and 10000.")
     .ValidateOnStart();
 
+builder.Services.AddOptions<CacheOptions>()
+    .BindConfiguration(CacheOptions.SectionName)
+    .Validate(options => !options.Enabled || options.Finance.AllTtlSeconds().All(seconds => seconds > 0),
+        "All enabled Finance cache TTL values must be greater than zero.")
+    .Validate(options => !options.Enabled
+        || !options.UseDistributedCache
+        || !string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("Redis")),
+        "ConnectionStrings:Redis is required when distributed caching is enabled.")
+    .ValidateOnStart();
+
 builder.Services.AddOptions<McpOptions>()
     .BindConfiguration(McpOptions.SectionName)
     .Validate(options => options.Finance.TimeoutSeconds > 0, "Mcp:Finance:TimeoutSeconds must be greater than zero.")
@@ -125,6 +136,20 @@ builder.Services.AddSingleton<AiProviderDescriptor>(serviceProvider =>
 });
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<AgentChatMiddleware>();
+var cacheOptions = builder.Configuration.GetSection(CacheOptions.SectionName).Get<CacheOptions>() ?? new CacheOptions();
+if (cacheOptions.Enabled && cacheOptions.UseDistributedCache)
+{
+    var redisConnectionString = builder.Configuration.GetConnectionString("Redis")
+        ?? throw new InvalidOperationException("ConnectionStrings:Redis is required when distributed caching is enabled.");
+    builder.Services.AddStackExchangeRedisCache(options =>
+    {
+        options.Configuration = redisConnectionString;
+        options.InstanceName = "cfo-agent:";
+    });
+}
+
+builder.Services.AddHybridCache();
+builder.Services.AddSingleton<IApplicationCache, HybridApplicationCache>();
 builder.Services.AddHttpClient(OllamaOptions.HttpClientName, (serviceProvider, client) =>
 {
     var ollama = serviceProvider.GetRequiredService<OllamaOptions>();
@@ -180,7 +205,11 @@ builder.Services.AddKeyedSingleton<IMcpToolAdapter>(McpToolAdapter.KnowledgeFile
         serviceProvider.GetRequiredService<ILogger<McpToolAdapter>>());
 });
 builder.Services.AddSingleton<FinanceMcpClient>();
-builder.Services.AddSingleton<IFinanceMcpClient>(serviceProvider => serviceProvider.GetRequiredService<FinanceMcpClient>());
+builder.Services.AddSingleton<IFinanceMcpClient>(serviceProvider => new CachedFinanceMcpClient(
+    serviceProvider.GetRequiredService<FinanceMcpClient>(),
+    serviceProvider.GetRequiredService<IApplicationCache>(),
+    serviceProvider.GetRequiredService<IOptions<CacheOptions>>(),
+    serviceProvider.GetRequiredService<TimeProvider>()));
 builder.Services.AddSingleton<IFinanceMcpRemoteClient>(serviceProvider => serviceProvider.GetRequiredService<FinanceMcpClient>());
 builder.Services.AddSingleton<KnowledgeFileMcpClient>();
 builder.Services.AddSingleton<IKnowledgeFileMcpRemoteClient, KnowledgeFileMcpHttpClient>();
