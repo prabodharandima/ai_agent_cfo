@@ -52,7 +52,7 @@ The LLM does not choose the database, MCP server, MCP tool, or financial calcula
 | Knowledge File MCP | Offers two restricted read-only file tools | API registers clients and checks readiness; current knowledge chat does not call it |
 | RAG initializer | One-shot `CfoAgent.Api --ingest-rag` process that reads Markdown and loads ChromaDB | Runs before the API container starts; it is not a chat request |
 | ChromaDB | Stores and searches indexed finance-document chunks | `FinancialKnowledgeAgent` reaches it through `IFinancialKnowledgeSearch` |
-| Redis | Optional distributed backing store for finance read-result caching | Reached only through HybridCache; it is not a source of truth |
+| Redis | Optional distributed backing store for finance, RAG retrieval, and embedding-vector caching | Reached only through HybridCache; it is not a source of truth |
 | PostgreSQL | Stores products, sales, and budget targets | Owned and accessed only by Finance MCP |
 | Ollama | Local language model running on Windows | The only runtime `IChatClient`; API containers reach it through `host.docker.internal` |
 | pgAdmin | Optional browser administration tool for PostgreSQL | Operational tool only; not part of an application request |
@@ -252,9 +252,9 @@ Before it is injected into agents, `Program.cs` wraps the client with `AgentChat
 
 ### Application cache
 
-`IApplicationCache` is the provider-neutral cache port. `HybridApplicationCache` implements it with HybridCache. `CachedFinanceMcpClient` decorates all six typed finance reads: arbitrary-period summary, current-week summary, week comparison, current-month top products, historical yearly totals, and budget target. `CachedFinancialKnowledgeSearch` decorates the ChromaDB retrieval port.
+`IApplicationCache` is the provider-neutral cache port. `HybridApplicationCache` implements it with HybridCache. `CachedFinanceMcpClient` decorates all six typed finance reads: arbitrary-period summary, current-week summary, week comparison, current-month top products, historical yearly totals, and budget target. `CachedFinancialKnowledgeSearch` decorates the ChromaDB retrieval port. `CachedEmbeddingGenerator` decorates the shared embedding-generator port used by both RAG ingestion and ChromaDB queries.
 
-Finance keys contain only a version, operation, canonical date or year/month arguments, and the injected current date where an operation is relative to "now." RAG retrieval keys contain the configured RAG index version, a SHA-256 hash of the normalized question, top-K, hashes of optional document-type and period filters, and the configured distance threshold. They never contain prompts, secrets, finance response data, or retrieved document content. Successful values use operation-specific TTLs. Exceptions and cancellation are rethrown and are not cached. If the cache itself fails, the adapter logs the failure category and calls the authoritative Finance MCP or ChromaDB dependency normally.
+Finance keys contain only a version, operation, canonical date or year/month arguments, and the injected current date where an operation is relative to "now." RAG retrieval keys contain the configured RAG index version, a SHA-256 hash of the normalized question, top-K, hashes of optional document-type and period filters, and the configured distance threshold. Embedding keys contain SHA-256 fingerprints of the input text, generator identity, vector dimension, and configured embedding version. They never contain prompts, secrets, finance response data, retrieved document content, or raw embedding input text. Successful values use operation-specific TTLs. Exceptions and cancellation are rethrown and are not cached. If the cache itself fails, the adapter logs the failure category and calls the authoritative Finance MCP, ChromaDB, or embedding generator normally.
 
 `Rag:IndexVersion` defaults to `v1`. Change it whenever the ChromaDB index is rebuilt or its content is replaced; the changed key namespace makes existing retrieval entries unreachable without requiring a Redis flush. Source metadata, distances, warnings, and therefore later citations are preserved in the cached retrieval result.
 
@@ -992,6 +992,8 @@ The local and container defaults are intentionally different. Local `appsettings
 | `AgentSessions:ExpirationMinutes` / `AgentSessions__ExpirationMinutes` | Sliding inactivity expiry for an in-memory conversation | `30` | `InMemoryAgentSessionStore` | 1 through 1,440 |
 | `AgentSessions:MaximumSessions` / `AgentSessions__MaximumSessions` | Maximum conversation entries in one API process | `1000` | `InMemoryAgentSessionStore` | 1 through 10,000 |
 | `Cache:Rag:RetrievalTtlSeconds` / `CACHE_RAG_RETRIEVAL_TTL_SECONDS` | Expiry for a successful ChromaDB retrieval | `300` | `CachedFinancialKnowledgeSearch` | Positive when caching is enabled |
+| `Cache:Embeddings:TtlSeconds` / `CACHE_EMBEDDINGS_TTL_SECONDS` | Expiry for a successful deterministic embedding vector | `3600` | `CachedEmbeddingGenerator` | Positive when caching is enabled |
+| `Cache:Embeddings:Version` / `CACHE_EMBEDDINGS_VERSION` | Explicit embedding-cache namespace version | `v1` | `CachedEmbeddingGenerator` | Nonblank; change after changing embedding behavior or dimension |
 | `Mcp:Finance:Enabled` | Enable required Finance MCP | `true` | Finance adapter/readiness | Finance readiness is unhealthy when false |
 | `Mcp:Finance:BaseUrl` / `FINANCE_MCP_BASE_URL` | Finance MCP service address | `http://finance-mcp:8080` | Finance keyed adapter | Absolute HTTP URL when enabled |
 | `Mcp:Finance:TimeoutSeconds` | Finance MCP timeout | `10` | Finance keyed adapter | Positive |

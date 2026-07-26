@@ -90,7 +90,9 @@ builder.Services.AddOptions<CacheOptions>()
     .BindConfiguration(CacheOptions.SectionName)
     .Validate(options => !options.Enabled
         || (options.Finance.AllTtlSeconds().All(seconds => seconds > 0)
-            && options.Rag.RetrievalTtlSeconds > 0),
+            && options.Rag.RetrievalTtlSeconds > 0
+            && options.Embeddings.TtlSeconds > 0
+            && !string.IsNullOrWhiteSpace(options.Embeddings.Version)),
         "All enabled cache TTL values must be greater than zero.")
     .Validate(options => !options.Enabled
         || !options.UseDistributedCache
@@ -175,7 +177,17 @@ builder.Services.AddSingleton<IChatClient>(serviceProvider =>
         _ => throw new InvalidOperationException("The configured AI provider is not registered.")
     };
 });
-builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>, DeterministicTokenHashEmbeddingGenerator>();
+builder.Services.AddSingleton<DeterministicTokenHashEmbeddingGenerator>();
+builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(serviceProvider =>
+{
+    var inner = serviceProvider.GetRequiredService<DeterministicTokenHashEmbeddingGenerator>();
+    return new CachedEmbeddingGenerator(
+        inner,
+        serviceProvider.GetRequiredService<IApplicationCache>(),
+        serviceProvider.GetRequiredService<IOptions<CacheOptions>>(),
+        inner.GetType().FullName ?? inner.GetType().Name,
+        inner.Dimension);
+});
 builder.Services.AddScoped<RagDocumentIngestionService>();
 builder.Services.AddScoped<ChromaFinancialKnowledgeSearch>();
 builder.Services.AddScoped<IFinancialKnowledgeSearch>(serviceProvider => new CachedFinancialKnowledgeSearch(

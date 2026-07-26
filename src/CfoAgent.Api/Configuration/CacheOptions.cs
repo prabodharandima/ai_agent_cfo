@@ -11,11 +11,20 @@ public sealed class CacheOptions
     public FinanceCacheOptions Finance { get; init; } = new();
 
     public RagCacheOptions Rag { get; init; } = new();
+
+    public EmbeddingCacheOptions Embeddings { get; init; } = new();
 }
 
 public sealed class RagCacheOptions
 {
     public int RetrievalTtlSeconds { get; init; } = 300;
+}
+
+public sealed class EmbeddingCacheOptions
+{
+    public int TtlSeconds { get; init; } = 3600;
+
+    public string Version { get; init; } = "v1";
 }
 
 public sealed class FinanceCacheOptions

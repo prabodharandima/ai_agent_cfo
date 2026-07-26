@@ -41,7 +41,7 @@ The following boundaries remain non-negotiable: deterministic C# and SQL finance
 
 ## Caching integration - In progress
 
-Task 1 adds the provider-neutral `IApplicationCache` port, a HybridCache implementation, optional internal Redis backing, and a decorator that caches every typed Finance MCP read with deterministic safe keys and operation-specific TTLs. Task 2 adds `CachedFinancialKnowledgeSearch`, which caches successful ChromaDB retrieval results using a normalized-question hash, filters, top-K, threshold, and `Rag:IndexVersion`. Local configuration defaults to memory-only caching; Compose enables Redis. Cache failure fails open to the authoritative dependency, while dependency failures, timeouts, and caller cancellation are not cached. Later caching tasks remain unimplemented.
+Task 1 adds the provider-neutral `IApplicationCache` port, a HybridCache implementation, optional internal Redis backing, and a decorator that caches every typed Finance MCP read with deterministic safe keys and operation-specific TTLs. Task 2 adds `CachedFinancialKnowledgeSearch`, which caches successful ChromaDB retrieval results using a normalized-question hash, filters, top-K, threshold, and `Rag:IndexVersion`. Task 3 adds `CachedEmbeddingGenerator`, which caches individual deterministic vectors using source-text, generator-identity, dimension, and embedding-version fingerprints without storing raw text. Local configuration defaults to memory-only caching; Compose enables Redis. Cache failure fails open to the authoritative dependency, while dependency failures, timeouts, and caller cancellation are not cached. Later caching tasks remain unimplemented.
 
 ## Validation
 
