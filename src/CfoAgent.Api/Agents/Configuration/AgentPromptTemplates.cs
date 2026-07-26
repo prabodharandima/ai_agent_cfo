@@ -34,18 +34,6 @@ public static class AgentPromptTemplates
         {{message}}
         """;
 
-    public static string ForSalesSummaryDateRange(string message, DateOnly currentDate) => $$"""
-        STRUCTURED_SALES_PERIOD_OUTPUT
-        Interpret the final user request as a sales-summary date range. Return JSON with exactly these properties:
-        - "startDate": inclusive date in YYYY-MM-DD format.
-        - "endDate": inclusive date in YYYY-MM-DD format.
-
-        The reference date is {{currentDate:yyyy-MM-dd}}. Do not return a date later than the reference date. If the request does not name a period, use the Monday of the reference week through the reference date. Do not calculate financial values or invoke tools.
-
-        USER_REQUEST:
-        {{message}}
-        """;
-
     public static string ForSalesSummary(SalesSummary summary) => Create(summary);
 
     public static string ForSalesSummaryDateRange(string message, DateOnly currentDate) => $$"""

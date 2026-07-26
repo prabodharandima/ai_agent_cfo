@@ -6,8 +6,6 @@ using CfoAgent.Api.Agents.Contracts;
 using CfoAgent.Api.Features.Sales;
 using CfoAgent.Api.Mcp;
 using Microsoft.Extensions.AI;
-using System.Globalization;
-using System.Text.Json;
 
 namespace CfoAgent.Api.Agents;
 
@@ -152,43 +150,6 @@ public sealed class SalesAnalysisAgent(
         return response.Text;
     }
 
-    private async Task<SalesPeriod> ResolveSalesSummaryPeriodAsync(
-        string message,
-        DateOnly currentDate,
-        CancellationToken cancellationToken)
-    {
-        var response = await chatClient.GetResponseAsync(
-            [new ChatMessage(ChatRole.User, AgentPromptTemplates.ForSalesSummaryDateRange(message, currentDate))],
-            new ChatOptions { Instructions = AgentDefinitions.SalesAnalysis.SystemInstructions },
-            cancellationToken);
-
-        if (TryResolveStandardRelativePeriod(message, currentDate, out var standardPeriod))
-        {
-            return standardPeriod;
-        }
-
-        var resolvedRange = DeserializeDateRange(response.Text);
-        return ValidateDateRange(resolvedRange, currentDate);
-    }
-
-    private static SalesSummaryDateRange DeserializeDateRange(string? responseText)
-    {
-        if (string.IsNullOrWhiteSpace(responseText))
-        {
-            throw new InvalidOperationException("The model did not return a sales-summary date range.");
-        }
-
-        try
-        {
-            return JsonSerializer.Deserialize<SalesSummaryDateRange>(responseText, JsonOptions)
-                ?? throw new InvalidOperationException("The model returned an invalid sales-summary date range.");
-        }
-        catch (JsonException exception)
-        {
-            throw new InvalidOperationException("The model returned an invalid sales-summary date range.", exception);
-        }
-    }
-
     private static SalesPeriod ValidateDateRange(SalesSummaryDateRange range, DateOnly currentDate)
     {
         if (!DateOnly.TryParseExact(range.StartDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var startDate) ||
@@ -209,48 +170,6 @@ public sealed class SalesAnalysisAgent(
 
         return new SalesPeriod(startDate, endDate);
     }
-
-    private static bool TryResolveStandardRelativePeriod(string message, DateOnly currentDate, out SalesPeriod period)
-    {
-        var normalized = message.ToUpperInvariant();
-
-        if (normalized.Contains("SINCE YESTERDAY", StringComparison.Ordinal))
-        {
-            period = new SalesPeriod(currentDate.AddDays(-1), currentDate);
-            return true;
-        }
-
-        if (normalized.Contains("LAST WEEK", StringComparison.Ordinal))
-        {
-            var currentWeekStart = StartOfWeek(currentDate);
-            period = new SalesPeriod(currentWeekStart.AddDays(-7), currentWeekStart.AddDays(-1));
-            return true;
-        }
-
-        if (normalized.Contains("THIS WEEK", StringComparison.Ordinal))
-        {
-            period = new SalesPeriod(StartOfWeek(currentDate), currentDate);
-            return true;
-        }
-
-        if (normalized.Contains("YESTERDAY", StringComparison.Ordinal))
-        {
-            var yesterday = currentDate.AddDays(-1);
-            period = new SalesPeriod(yesterday, yesterday);
-            return true;
-        }
-
-        if (normalized.Contains("TODAY", StringComparison.Ordinal))
-        {
-            period = new SalesPeriod(currentDate, currentDate);
-            return true;
-        }
-
-        period = null!;
-        return false;
-    }
-
-    private static DateOnly StartOfWeek(DateOnly date) => date.AddDays(-((int)date.DayOfWeek + 6) % 7);
 
     private async Task<SalesPeriod> ResolveSalesSummaryPeriodAsync(
         string message,
