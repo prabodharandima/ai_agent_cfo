@@ -15,6 +15,8 @@ public sealed class CacheOptions
     public EmbeddingCacheOptions Embeddings { get; init; } = new();
 
     public McpDiscoveryCacheOptions McpDiscovery { get; init; } = new();
+
+    public LlmClassificationCacheOptions Classification { get; init; } = new();
 }
 
 public sealed class RagCacheOptions
@@ -34,6 +36,15 @@ public sealed class McpDiscoveryCacheOptions
     public int TtlSeconds { get; init; } = 300;
 
     public string SchemaVersion { get; init; } = "v1";
+}
+
+public sealed class LlmClassificationCacheOptions
+{
+    public int TtlSeconds { get; init; } = 300;
+
+    public string PromptVersion { get; init; } = "v1";
+
+    public string AllowedIntentSetVersion { get; init; } = "v1";
 }
 
 public sealed class FinanceCacheOptions

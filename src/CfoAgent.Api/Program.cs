@@ -94,7 +94,10 @@ builder.Services.AddOptions<CacheOptions>()
             && options.Embeddings.TtlSeconds > 0
             && !string.IsNullOrWhiteSpace(options.Embeddings.Version)
             && options.McpDiscovery.TtlSeconds > 0
-            && !string.IsNullOrWhiteSpace(options.McpDiscovery.SchemaVersion)),
+            && !string.IsNullOrWhiteSpace(options.McpDiscovery.SchemaVersion)
+            && options.Classification.TtlSeconds > 0
+            && !string.IsNullOrWhiteSpace(options.Classification.PromptVersion)
+            && !string.IsNullOrWhiteSpace(options.Classification.AllowedIntentSetVersion)),
         "All enabled cache TTL values must be greater than zero.")
     .Validate(options => !options.Enabled
         || !options.UseDistributedCache

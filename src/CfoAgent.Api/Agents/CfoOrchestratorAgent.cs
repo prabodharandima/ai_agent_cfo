@@ -1,13 +1,19 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using CfoAgent.Api.AI;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
+using CfoAgent.Api.Caching;
+using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Rag.Retrieval;
 using CfoAgent.Api.Observability;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Agents;
 
@@ -17,11 +23,17 @@ public sealed class CfoOrchestratorAgent(
     FinancialKnowledgeAgent financialKnowledgeAgent,
     AgentResultComposer resultComposer,
     IChatClient chatClient,
-    ILogger<CfoOrchestratorAgent>? logger = null)
+    ILogger<CfoOrchestratorAgent>? logger = null,
+    IApplicationCache? applicationCache = null,
+    IOptions<CacheOptions>? cacheOptions = null,
+    AiProviderDescriptor? aiProvider = null,
+    IOptions<AgentMiddlewareOptions>? agentMiddlewareOptions = null)
 {
     private const int MaximumClassificationResponseCharacters = 256;
     private static readonly JsonSerializerOptions StructuredOutputJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly ILogger<CfoOrchestratorAgent> _logger = logger ?? NullLogger<CfoOrchestratorAgent>.Instance;
+    private readonly LlmClassificationCacheOptions classificationCacheOptions = cacheOptions?.Value.Classification ?? new();
+    private readonly AgentMiddlewareOptions promptRiskOptions = agentMiddlewareOptions?.Value ?? new();
 
     public async Task<CfoIntent> ClassifyAsync(AgentRequest request, CancellationToken cancellationToken = default)
     {
@@ -32,21 +44,8 @@ public sealed class CfoOrchestratorAgent(
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var response = await chatClient.GetResponseAsync(
-                [new ChatMessage(ChatRole.User, AgentPromptTemplates.ForClassification(request.Message, request.SessionContext))],
-                new ChatOptions
-                {
-                    Instructions = AgentDefinitions.CfoOrchestrator.SystemInstructions,
-                    ResponseFormat = ChatResponseFormat.ForJsonSchema<IntentClassificationOutput>(
-                        StructuredOutputJsonOptions,
-                        "cfo_intent_classification",
-                        "A validated CFO request intent.")
-                },
-                cancellationToken);
-
-            var intent = TryParseStructuredIntent(response.Text, out var parsedIntent) && parsedIntent != CfoIntent.Unsupported
-                ? parsedIntent
-                : ClassifyDeterministically(request.Message);
+            var modelIntent = await TryGetValidatedModelIntentAsync(request, cancellationToken);
+            var intent = modelIntent ?? ClassifyDeterministically(request.Message);
             AgentActivityTracing.Complete(activity, "intent.classification", stopwatch, "Success", AgentDefinitions.CfoOrchestrator.Name);
             return intent;
         }
@@ -177,6 +176,138 @@ public sealed class CfoOrchestratorAgent(
             return false;
         }
     }
+
+    private async Task<CfoIntent?> TryGetValidatedModelIntentAsync(
+        AgentRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (applicationCache is null)
+            {
+                return await GetValidatedModelIntentAsync(request, cancellationToken);
+            }
+
+            var (providerName, modelName) = GetProviderIdentity();
+            var cacheKey = CreateClassificationCacheKey(
+                request.Message,
+                request.SessionContext,
+                providerName,
+                modelName,
+                classificationCacheOptions,
+                promptRiskOptions);
+            return await applicationCache.GetOrCreateAsync(
+                cacheKey,
+                TimeSpan.FromSeconds(classificationCacheOptions.TtlSeconds),
+                token => GetValidatedModelIntentAsync(request, token),
+                cancellationToken);
+        }
+        catch (ClassificationOutputNotCacheableException)
+        {
+            return null;
+        }
+    }
+
+    private async Task<CfoIntent> GetValidatedModelIntentAsync(
+        AgentRequest request,
+        CancellationToken cancellationToken)
+    {
+        var response = await chatClient.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, AgentPromptTemplates.ForClassification(request.Message, request.SessionContext))],
+            new ChatOptions
+            {
+                Instructions = AgentDefinitions.CfoOrchestrator.SystemInstructions,
+                ResponseFormat = ChatResponseFormat.ForJsonSchema<IntentClassificationOutput>(
+                    StructuredOutputJsonOptions,
+                    "cfo_intent_classification",
+                    "A validated CFO request intent.")
+            },
+            cancellationToken);
+
+        if (!TryParseStructuredIntent(response.Text, out var intent) || intent == CfoIntent.Unsupported)
+        {
+            throw new ClassificationOutputNotCacheableException();
+        }
+
+        return intent;
+    }
+
+    private (string ProviderName, string ModelName) GetProviderIdentity()
+    {
+        if (aiProvider is not null)
+        {
+            return (aiProvider.ProviderName, aiProvider.ModelName);
+        }
+
+        var metadata = chatClient.GetService(typeof(ChatClientMetadata)) as ChatClientMetadata;
+        return (
+            string.IsNullOrWhiteSpace(metadata?.ProviderName) ? "unknown" : metadata.ProviderName,
+            string.IsNullOrWhiteSpace(metadata?.DefaultModelId) ? "unknown" : metadata.DefaultModelId);
+    }
+
+    internal static string CreateClassificationCacheKey(
+        string message,
+        AgentSessionContext? sessionContext,
+        string providerName,
+        string modelName,
+        LlmClassificationCacheOptions cacheOptions,
+        AgentMiddlewareOptions promptRiskOptions)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+        ArgumentNullException.ThrowIfNull(cacheOptions);
+        ArgumentNullException.ThrowIfNull(promptRiskOptions);
+
+        var allowedIntents = string.Join(',', Enum.GetNames<CfoIntent>().OrderBy(name => name, StringComparer.Ordinal));
+        return string.Join(
+            ':',
+            "llm-classification",
+            Sha256(providerName),
+            Sha256(modelName),
+            Sha256(cacheOptions.PromptVersion),
+            Sha256($"{cacheOptions.AllowedIntentSetVersion}\n{allowedIntents}"),
+            CreateSessionContextFingerprint(sessionContext),
+            Sha256(NormalizeMessage(message)),
+            CreatePromptRiskPolicyFingerprint(promptRiskOptions));
+    }
+
+    private static string CreateSessionContextFingerprint(AgentSessionContext? sessionContext)
+    {
+        if (sessionContext is not { Turns.Count: > 0 })
+        {
+            return "stateless";
+        }
+
+        var serializedTurns = string.Join(
+            '\n',
+            sessionContext.Turns.Select(turn =>
+            {
+                var period = turn.DataPeriod;
+                return string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{turn.ResponseType}|{period?.From:yyyyMMdd}|{period?.To:yyyyMMdd}|{(period is null ? "none" : Sha256(period.Label ?? string.Empty))}");
+            }));
+        return Sha256(serializedTurns);
+    }
+
+    private static string CreatePromptRiskPolicyFingerprint(AgentMiddlewareOptions options)
+    {
+        var normalizedPhrases = string.Join(
+            '\n',
+            options.SuspiciousPromptPhrases
+                .Where(phrase => !string.IsNullOrWhiteSpace(phrase))
+                .Select(phrase => phrase.Trim())
+                .OrderBy(phrase => phrase, StringComparer.OrdinalIgnoreCase));
+        return Sha256($"{options.PromptInjectionCheckEnabled}\n{normalizedPhrases}");
+    }
+
+    private static string NormalizeMessage(string message) => string.Join(
+        ' ',
+        message.Normalize(NormalizationForm.FormKC).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+
+    private static string Sha256(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    private sealed class ClassificationOutputNotCacheableException : Exception;
 
     private static async Task<AgentResult> ExecuteSpecialistAsync(string agentName, Func<Task<AgentResult>> operation, CancellationToken cancellationToken)
     {
