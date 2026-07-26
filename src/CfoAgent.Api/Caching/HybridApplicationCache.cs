@@ -28,13 +28,17 @@ public sealed class HybridApplicationCache(
         cancellationToken.ThrowIfCancellationRequested();
         if (!options.Enabled)
         {
+            logger.LogInformation(
+                "Application cache bypassed. CacheKey: {CacheKey}; Reason: {Reason}.",
+                key,
+                "Disabled");
             return await factory(cancellationToken);
         }
 
         var invocation = new FactoryInvocation<T>();
         try
         {
-            return await hybridCache.GetOrCreateAsync(
+            var value = await hybridCache.GetOrCreateAsync(
                 key,
                 async token =>
                 {
@@ -56,6 +60,12 @@ public sealed class HybridApplicationCache(
                     LocalCacheExpiration = timeToLive
                 },
                 cancellationToken: cancellationToken);
+            logger.LogInformation(
+                "Application cache {Outcome}. CacheKey: {CacheKey}; TtlSeconds: {TtlSeconds}.",
+                invocation.HasValue ? "Miss" : "Hit",
+                key,
+                timeToLive.TotalSeconds);
+            return value;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -69,7 +79,8 @@ public sealed class HybridApplicationCache(
         catch (Exception exception)
         {
             logger.LogWarning(
-                "Application cache unavailable; using the authoritative dependency. FailureType: {FailureType}.",
+                "Application cache failed open. CacheKey: {CacheKey}; FailureType: {FailureType}.",
+                key,
                 exception.GetType().Name);
 
             return invocation.HasValue
@@ -90,6 +101,7 @@ public sealed class HybridApplicationCache(
         try
         {
             await hybridCache.RemoveAsync(key, cancellationToken);
+            logger.LogInformation("Application cache invalidated. CacheKey: {CacheKey}.", key);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
