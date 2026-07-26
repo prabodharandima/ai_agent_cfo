@@ -252,9 +252,9 @@ Before it is injected into agents, `Program.cs` wraps the client with `AgentChat
 
 ### Application cache
 
-`IApplicationCache` is the provider-neutral cache port. `HybridApplicationCache` implements it with HybridCache. `CachedFinanceMcpClient` decorates all six typed finance reads: arbitrary-period summary, current-week summary, week comparison, current-month top products, historical yearly totals, and budget target. `CachedFinancialKnowledgeSearch` decorates the ChromaDB retrieval port. `CachedEmbeddingGenerator` decorates the shared embedding-generator port used by both RAG ingestion and ChromaDB queries.
+`IApplicationCache` is the provider-neutral cache port. `HybridApplicationCache` implements it with HybridCache and supports cache-entry removal for dependency-driven invalidation. `CachedFinanceMcpClient` decorates all six typed finance reads. `CachedFinancialKnowledgeSearch` decorates the ChromaDB retrieval port. `CachedEmbeddingGenerator` decorates the shared embedding-generator port. `McpToolAdapter` uses the same port for serializable approved tool-name snapshots; MCP SDK client/tool objects are never stored in HybridCache or Redis.
 
-Finance keys contain only a version, operation, canonical date or year/month arguments, and the injected current date where an operation is relative to "now." RAG retrieval keys contain the configured RAG index version, a SHA-256 hash of the normalized question, top-K, hashes of optional document-type and period filters, and the configured distance threshold. Embedding keys contain SHA-256 fingerprints of the input text, generator identity, vector dimension, and configured embedding version. They never contain prompts, secrets, finance response data, retrieved document content, or raw embedding input text. Successful values use operation-specific TTLs. Exceptions and cancellation are rethrown and are not cached. If the cache itself fails, the adapter logs the failure category and calls the authoritative Finance MCP, ChromaDB, or embedding generator normally.
+Finance keys contain only a version, operation, canonical arguments, and the injected current date where needed. RAG and embedding keys use safe SHA-256 fingerprints. MCP discovery keys fingerprint the discovery schema version, dependency identity, canonical `/mcp` endpoint, and sorted allow-list. They never contain prompts, secrets, finance response data, retrieved content, raw embedding text, MCP arguments, or tool results. Successful values use operation-specific TTLs. Exceptions and cancellation are rethrown and are not cached. If the cache itself fails, the authoritative Finance MCP, ChromaDB, embedding generator, or MCP `tools/list` operation runs normally.
 
 `Rag:IndexVersion` defaults to `v1`. Change it whenever the ChromaDB index is rebuilt or its content is replaced; the changed key namespace makes existing retrieval entries unreachable without requiring a Redis flush. Source metadata, distances, warnings, and therefore later citations are preserved in the cached retrieval result.
 
@@ -685,9 +685,9 @@ Finance and Knowledge tools return an envelope containing `IsSuccess`, `Data`, a
 
 ### Connection reuse and caching
 
-Each keyed adapter is registered as a singleton. It lazily creates one SDK client and caches approved discovered tools for that live connection. A semaphore prevents concurrent duplicate initialization.
+Each keyed adapter is registered as a singleton. It lazily creates one SDK client and retains an in-memory approved-name set for the live adapter. A semaphore prevents concurrent duplicate initialization. Separately, `IApplicationCache` stores only the approved string names for five minutes by default, allowing another API instance or a newly constructed adapter instance to skip `tools/list` while the snapshot is valid. Every new SDK client still performs the MCP initialization handshake. A reconnect caused by a transport, timeout, capability, or tool failure bypasses that snapshot and refreshes discovery.
 
-There is no background polling. Discovery happens on first use or readiness and again after a reset/reconnect.
+There is no background polling. A cache miss calls `tools/list`, filters against the configured allow-list, and stores only approved names. Tool calls use the live SDK client's `CallToolAsync`; server-side schema validation remains authoritative.
 
 ### Missing and additional tools
 
@@ -698,9 +698,7 @@ There is no background polling. Discovery happens on first use or readiness and 
 
 ### Error and refresh behavior
 
-Transport errors and adapter timeouts reset and dispose the SDK client and cache. A server result with `IsError=true` also resets. The next operation reconnects and rediscovers.
-
-Not every capability mismatch or application-level invalid envelope immediately clears the cache. This is a current implementation limitation, described later.
+Transport errors, adapter timeouts, and MCP tool errors reset and dispose the SDK client, remove the shared discovery snapshot, and mark the next operation to bypass distributed discovery once. A missing required allow-listed tool also triggers one direct refresh before returning `CapabilityMismatch`. Caller cancellation remains cancellation and does not populate or invalidate the cache. Cache read/write/removal failure is logged safely and falls back to direct `tools/list`.
 
 ## 10. Finance MCP server
 
@@ -994,6 +992,8 @@ The local and container defaults are intentionally different. Local `appsettings
 | `Cache:Rag:RetrievalTtlSeconds` / `CACHE_RAG_RETRIEVAL_TTL_SECONDS` | Expiry for a successful ChromaDB retrieval | `300` | `CachedFinancialKnowledgeSearch` | Positive when caching is enabled |
 | `Cache:Embeddings:TtlSeconds` / `CACHE_EMBEDDINGS_TTL_SECONDS` | Expiry for a successful deterministic embedding vector | `3600` | `CachedEmbeddingGenerator` | Positive when caching is enabled |
 | `Cache:Embeddings:Version` / `CACHE_EMBEDDINGS_VERSION` | Explicit embedding-cache namespace version | `v1` | `CachedEmbeddingGenerator` | Nonblank; change after changing embedding behavior or dimension |
+| `Cache:McpDiscovery:TtlSeconds` / `CACHE_MCP_DISCOVERY_TTL_SECONDS` | Expiry for approved MCP tool-name snapshots | `300` | `McpToolAdapter` | Positive when caching is enabled |
+| `Cache:McpDiscovery:SchemaVersion` / `CACHE_MCP_DISCOVERY_SCHEMA_VERSION` | MCP discovery cache schema namespace | `v1` | `McpToolAdapter` | Nonblank; change if the cached snapshot representation changes |
 | `Mcp:Finance:Enabled` | Enable required Finance MCP | `true` | Finance adapter/readiness | Finance readiness is unhealthy when false |
 | `Mcp:Finance:BaseUrl` / `FINANCE_MCP_BASE_URL` | Finance MCP service address | `http://finance-mcp:8080` | Finance keyed adapter | Absolute HTTP URL when enabled |
 | `Mcp:Finance:TimeoutSeconds` | Finance MCP timeout | `10` | Finance keyed adapter | Positive |
@@ -1139,7 +1139,7 @@ These limitations are visible in the current code:
 - Mixed handling supports only Forecast plus Knowledge. It is not a general multi-agent planner.
 - MCP tools are dynamically discovered but selected by fixed typed mappings. Newly discovered tools do not automatically become chat capabilities.
 - Discovered MCP tools are not passed to the LLM, and the LLM does not select tools.
-- Tool discovery is cached per connection with no background refresh. Refresh happens after selected failures/reconnect, and not every capability mismatch or invalid envelope clears the cache immediately.
+- Tool discovery has a five-minute shared snapshot by default and no background polling, so a removed tool can remain listed until invocation fails, required-tool validation refreshes, the TTL expires, or another reset invalidates the entry.
 - `get_budget_target` exists but is not used by the current chat agents.
 - Knowledge File MCP is not part of the current knowledge-answer path; ChromaDB is.
 - The token-hash embedding is deterministic and test-friendly but is not a trained semantic model. It depends heavily on shared tokens and can suffer hash collisions.

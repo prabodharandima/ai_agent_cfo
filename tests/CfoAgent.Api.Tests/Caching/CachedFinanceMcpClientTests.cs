@@ -232,6 +232,13 @@ public sealed class CachedFinanceMcpClientTests
             values[key] = value;
             return value;
         }
+
+        public Task RemoveAsync(string key, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            values.Remove(key);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingFinanceMcpClient : IFinanceMcpClient

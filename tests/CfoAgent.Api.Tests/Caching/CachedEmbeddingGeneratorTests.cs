@@ -150,6 +150,13 @@ public sealed class CachedEmbeddingGeneratorTests
             values[key] = value;
             return value;
         }
+
+        public Task RemoveAsync(string key, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            values.Remove(key);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class RecordingEmbeddingGenerator : IEmbeddingGenerator<string, Embedding<float>>

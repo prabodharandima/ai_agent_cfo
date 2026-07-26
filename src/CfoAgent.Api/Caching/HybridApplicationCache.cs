@@ -78,6 +78,31 @@ public sealed class HybridApplicationCache(
         }
     }
 
+    public async Task RemoveAsync(string key, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!options.Enabled)
+        {
+            return;
+        }
+
+        try
+        {
+            await hybridCache.RemoveAsync(key, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogWarning(
+                "Application cache invalidation failed; the authoritative dependency remains active. FailureType: {FailureType}.",
+                exception.GetType().Name);
+        }
+    }
+
     private sealed class FactoryInvocation<T>
     {
         public bool HasValue { get; private set; }

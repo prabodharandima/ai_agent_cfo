@@ -13,6 +13,8 @@ public sealed class CacheOptions
     public RagCacheOptions Rag { get; init; } = new();
 
     public EmbeddingCacheOptions Embeddings { get; init; } = new();
+
+    public McpDiscoveryCacheOptions McpDiscovery { get; init; } = new();
 }
 
 public sealed class RagCacheOptions
@@ -25,6 +27,13 @@ public sealed class EmbeddingCacheOptions
     public int TtlSeconds { get; init; } = 3600;
 
     public string Version { get; init; } = "v1";
+}
+
+public sealed class McpDiscoveryCacheOptions
+{
+    public int TtlSeconds { get; init; } = 300;
+
+    public string SchemaVersion { get; init; } = "v1";
 }
 
 public sealed class FinanceCacheOptions

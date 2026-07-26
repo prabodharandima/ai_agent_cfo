@@ -92,7 +92,9 @@ builder.Services.AddOptions<CacheOptions>()
         || (options.Finance.AllTtlSeconds().All(seconds => seconds > 0)
             && options.Rag.RetrievalTtlSeconds > 0
             && options.Embeddings.TtlSeconds > 0
-            && !string.IsNullOrWhiteSpace(options.Embeddings.Version)),
+            && !string.IsNullOrWhiteSpace(options.Embeddings.Version)
+            && options.McpDiscovery.TtlSeconds > 0
+            && !string.IsNullOrWhiteSpace(options.McpDiscovery.SchemaVersion)),
         "All enabled cache TTL values must be greater than zero.")
     .Validate(options => !options.Enabled
         || !options.UseDistributedCache
@@ -209,7 +211,9 @@ builder.Services.AddKeyedSingleton<IMcpToolAdapter>(McpToolAdapter.FinanceKey, (
         finance.TimeoutSeconds,
         finance.AllowedToolNames,
         serviceProvider.GetRequiredService<IHttpClientFactory>(),
-        serviceProvider.GetRequiredService<ILogger<McpToolAdapter>>());
+        serviceProvider.GetRequiredService<ILogger<McpToolAdapter>>(),
+        serviceProvider.GetRequiredService<IApplicationCache>(),
+        serviceProvider.GetRequiredService<IOptions<CacheOptions>>());
 });
 builder.Services.AddKeyedSingleton<IMcpToolAdapter>(McpToolAdapter.KnowledgeFilesKey, (serviceProvider, _) =>
 {
@@ -222,7 +226,9 @@ builder.Services.AddKeyedSingleton<IMcpToolAdapter>(McpToolAdapter.KnowledgeFile
         knowledge.TimeoutSeconds,
         knowledge.AllowedToolNames,
         serviceProvider.GetRequiredService<IHttpClientFactory>(),
-        serviceProvider.GetRequiredService<ILogger<McpToolAdapter>>());
+        serviceProvider.GetRequiredService<ILogger<McpToolAdapter>>(),
+        serviceProvider.GetRequiredService<IApplicationCache>(),
+        serviceProvider.GetRequiredService<IOptions<CacheOptions>>());
 });
 builder.Services.AddSingleton<FinanceMcpClient>();
 builder.Services.AddSingleton<IFinanceMcpClient>(serviceProvider => new CachedFinanceMcpClient(

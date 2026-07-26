@@ -7,4 +7,6 @@ public interface IApplicationCache
         TimeSpan timeToLive,
         Func<CancellationToken, Task<T>> factory,
         CancellationToken cancellationToken);
+
+    Task RemoveAsync(string key, CancellationToken cancellationToken);
 }

@@ -1,8 +1,13 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
+using CfoAgent.Api.Caching;
+using CfoAgent.Api.Configuration;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using System.Diagnostics;
 using CfoAgent.Api.Observability;
+using Microsoft.Extensions.Options;
 
 namespace CfoAgent.Api.Mcp;
 
@@ -22,9 +27,13 @@ public sealed class McpToolAdapter : IMcpToolAdapter, IAsyncDisposable
     private readonly HashSet<string> allowedToolNames;
     private readonly IHttpClientFactory httpClientFactory;
     private readonly ILogger<McpToolAdapter> logger;
+    private readonly IApplicationCache cache;
+    private readonly McpDiscoveryCacheOptions discoveryCacheOptions;
+    private readonly string discoveryCacheKey;
     private readonly SemaphoreSlim gate = new(1, 1);
     private McpClient? client;
-    private IReadOnlyDictionary<string, McpClientTool>? approvedTools;
+    private IReadOnlySet<string>? approvedToolNames;
+    private bool forceDiscoveryRefresh;
     private bool disposed;
 
     public McpToolAdapter(
@@ -35,13 +44,17 @@ public sealed class McpToolAdapter : IMcpToolAdapter, IAsyncDisposable
         int timeoutSeconds,
         IEnumerable<string> allowedToolNames,
         IHttpClientFactory httpClientFactory,
-        ILogger<McpToolAdapter> logger)
+        ILogger<McpToolAdapter> logger,
+        IApplicationCache cache,
+        IOptions<CacheOptions> cacheOptions)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dependencyName);
         ArgumentException.ThrowIfNullOrWhiteSpace(httpClientName);
         ArgumentNullException.ThrowIfNull(allowedToolNames);
         ArgumentNullException.ThrowIfNull(httpClientFactory);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(cache);
+        ArgumentNullException.ThrowIfNull(cacheOptions);
 
         this.allowedToolNames = allowedToolNames.ToHashSet(StringComparer.Ordinal);
         if (this.allowedToolNames.Count == 0 || this.allowedToolNames.Any(string.IsNullOrWhiteSpace))
@@ -61,6 +74,18 @@ public sealed class McpToolAdapter : IMcpToolAdapter, IAsyncDisposable
         timeout = TimeSpan.FromSeconds(timeoutSeconds);
         this.httpClientFactory = httpClientFactory;
         this.logger = logger;
+        this.cache = cache;
+        discoveryCacheOptions = cacheOptions.Value.McpDiscovery;
+        if (discoveryCacheOptions.TtlSeconds <= 0 || string.IsNullOrWhiteSpace(discoveryCacheOptions.SchemaVersion))
+        {
+            throw new ArgumentException("MCP discovery cache TTL and schema version are required.", nameof(cacheOptions));
+        }
+
+        discoveryCacheKey = CreateDiscoveryCacheKey(
+            dependencyName,
+            baseUrl,
+            this.allowedToolNames,
+            discoveryCacheOptions.SchemaVersion);
     }
 
     public Task<IReadOnlyList<string>> GetApprovedToolNamesAsync(
@@ -70,16 +95,25 @@ public sealed class McpToolAdapter : IMcpToolAdapter, IAsyncDisposable
         EnsureEnabled();
         return ExecuteDependencyOperationAsync(async token =>
         {
-            var tools = await GetOrDiscoverToolsAsync(token);
+            var tools = await GetOrDiscoverToolNamesAsync(token);
             if (requiredToolNames is null)
             {
-                return (IReadOnlyList<string>)tools.Keys.OrderBy(name => name, StringComparer.Ordinal).ToArray();
+                return (IReadOnlyList<string>)tools.OrderBy(name => name, StringComparer.Ordinal).ToArray();
             }
 
             var requestedNames = requiredToolNames.ToHashSet(StringComparer.Ordinal);
-            if (requestedNames.Count == 0 || requestedNames.Any(name => !allowedToolNames.Contains(name) || !tools.ContainsKey(name)))
+            if (requestedNames.Count == 0 || requestedNames.Any(name => !allowedToolNames.Contains(name)))
             {
                 throw new McpDependencyException(dependencyName, McpDependencyFailureKind.CapabilityMismatch);
+            }
+
+            if (requestedNames.Any(name => !tools.Contains(name)))
+            {
+                tools = await RefreshDiscoveryAsync(token);
+                if (requestedNames.Any(name => !tools.Contains(name)))
+                {
+                    throw new McpDependencyException(dependencyName, McpDependencyFailureKind.CapabilityMismatch);
+                }
             }
 
             return (IReadOnlyList<string>)requestedNames
@@ -98,16 +132,26 @@ public sealed class McpToolAdapter : IMcpToolAdapter, IAsyncDisposable
 
         return ExecuteDependencyOperationAsync(async token =>
         {
-            var tools = await GetOrDiscoverToolsAsync(token);
-            if (!allowedToolNames.Contains(toolName) || !tools.TryGetValue(toolName, out var tool))
+            if (!allowedToolNames.Contains(toolName))
             {
                 throw new McpDependencyException(dependencyName, McpDependencyFailureKind.CapabilityMismatch);
             }
 
-            var result = await tool.CallAsync(arguments, cancellationToken: token);
+            var tools = await GetOrDiscoverToolNamesAsync(token);
+            if (!tools.Contains(toolName))
+            {
+                tools = await RefreshDiscoveryAsync(token);
+                if (!tools.Contains(toolName))
+                {
+                    throw new McpDependencyException(dependencyName, McpDependencyFailureKind.CapabilityMismatch);
+                }
+            }
+
+            var connectedClient = await GetOrCreateClientAsync(token);
+            var result = await connectedClient.CallToolAsync(toolName, arguments, cancellationToken: token);
             if (result.IsError == true)
             {
-                await ResetConnectionAsync();
+                await ResetConnectionAsync(invalidateDistributedDiscovery: true);
                 throw new McpDependencyException(dependencyName, McpDependencyFailureKind.InvalidResponse);
             }
 
@@ -137,41 +181,107 @@ public sealed class McpToolAdapter : IMcpToolAdapter, IAsyncDisposable
         }, cancellationToken);
     }
 
-    private async Task<IReadOnlyDictionary<string, McpClientTool>> GetOrDiscoverToolsAsync(CancellationToken cancellationToken)
+    private async Task<IReadOnlySet<string>> GetOrDiscoverToolNamesAsync(CancellationToken cancellationToken)
     {
-        if (approvedTools is not null)
+        if (approvedToolNames is not null)
         {
-            return approvedTools;
+            return approvedToolNames;
         }
 
         await gate.WaitAsync(cancellationToken);
         try
         {
             ObjectDisposedException.ThrowIf(disposed, this);
-            if (approvedTools is not null)
+            if (approvedToolNames is not null)
             {
-                return approvedTools;
+                return approvedToolNames;
             }
 
             var connectedClient = await GetOrCreateClientUnderLockAsync(cancellationToken);
-            var discovered = await connectedClient.ListToolsAsync(cancellationToken: cancellationToken);
-            var discoveredByName = new Dictionary<string, McpClientTool>(StringComparer.Ordinal);
-            foreach (var tool in discovered)
+            string[] cachedNames;
+            if (forceDiscoveryRefresh)
             {
-                if (!discoveredByName.TryAdd(tool.Name, tool))
-                {
-                    throw new McpDependencyException(dependencyName, McpDependencyFailureKind.CapabilityMismatch);
-                }
+                cachedNames = await DiscoverApprovedToolNamesAsync(connectedClient, cancellationToken);
+                forceDiscoveryRefresh = false;
+                await cache.GetOrCreateAsync(
+                    discoveryCacheKey,
+                    TimeSpan.FromSeconds(discoveryCacheOptions.TtlSeconds),
+                    _ => Task.FromResult(cachedNames),
+                    cancellationToken);
+            }
+            else
+            {
+                cachedNames = await cache.GetOrCreateAsync(
+                    discoveryCacheKey,
+                    TimeSpan.FromSeconds(discoveryCacheOptions.TtlSeconds),
+                    token => DiscoverApprovedToolNamesAsync(connectedClient, token),
+                    cancellationToken);
             }
 
-            approvedTools = discoveredByName
-                .Where(entry => allowedToolNames.Contains(entry.Key))
-                .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
+            approvedToolNames = cachedNames
+                .Where(allowedToolNames.Contains)
+                .ToHashSet(StringComparer.Ordinal);
             logger.LogInformation(
-                "{DependencyName} capability discovery cached {ToolCount} approved tools.",
+                "{DependencyName} capability discovery loaded {ToolCount} approved tools.",
                 dependencyName,
-                approvedTools.Count);
-            return approvedTools;
+                approvedToolNames.Count);
+            return approvedToolNames;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<string[]> DiscoverApprovedToolNamesAsync(
+        McpClient connectedClient,
+        CancellationToken cancellationToken)
+    {
+        var discovered = await connectedClient.ListToolsAsync(cancellationToken: cancellationToken);
+        var discoveredNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var tool in discovered)
+        {
+            if (!discoveredNames.Add(tool.Name))
+            {
+                throw new McpDependencyException(dependencyName, McpDependencyFailureKind.CapabilityMismatch);
+            }
+        }
+
+        return discoveredNames
+            .Where(allowedToolNames.Contains)
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+    }
+
+    private async Task<IReadOnlySet<string>> RefreshDiscoveryAsync(CancellationToken cancellationToken)
+    {
+        await InvalidateDiscoveryAsync(cancellationToken);
+        return await GetOrDiscoverToolNamesAsync(cancellationToken);
+    }
+
+    private async Task InvalidateDiscoveryAsync(CancellationToken cancellationToken)
+    {
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            approvedToolNames = null;
+            forceDiscoveryRefresh = true;
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        await cache.RemoveAsync(discoveryCacheKey, cancellationToken);
+    }
+
+    private async Task<McpClient> GetOrCreateClientAsync(CancellationToken cancellationToken)
+    {
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            return await GetOrCreateClientUnderLockAsync(cancellationToken);
         }
         finally
         {
@@ -234,7 +344,7 @@ public sealed class McpToolAdapter : IMcpToolAdapter, IAsyncDisposable
         }
         catch (OperationCanceledException exception)
         {
-            await ResetConnectionAsync();
+            await ResetConnectionAsync(invalidateDistributedDiscovery: true);
             AgentActivityTracing.Complete(activity, operationName, stopwatch, "Failure");
             throw new McpDependencyException(dependencyName, McpDependencyFailureKind.Timeout, exception);
         }
@@ -245,18 +355,19 @@ public sealed class McpToolAdapter : IMcpToolAdapter, IAsyncDisposable
         }
         catch (Exception exception)
         {
-            await ResetConnectionAsync();
+            await ResetConnectionAsync(invalidateDistributedDiscovery: true);
             AgentActivityTracing.Complete(activity, operationName, stopwatch, "Failure");
             throw new McpDependencyException(dependencyName, McpDependencyFailureKind.Unavailable, exception);
         }
     }
 
-    private async Task ResetConnectionAsync()
+    private async Task ResetConnectionAsync(bool invalidateDistributedDiscovery)
     {
         await gate.WaitAsync();
         try
         {
-            approvedTools = null;
+            approvedToolNames = null;
+            forceDiscoveryRefresh = invalidateDistributedDiscovery;
             if (client is not null)
             {
                 await client.DisposeAsync();
@@ -266,6 +377,11 @@ public sealed class McpToolAdapter : IMcpToolAdapter, IAsyncDisposable
         finally
         {
             gate.Release();
+        }
+
+        if (invalidateDistributedDiscovery)
+        {
+            await cache.RemoveAsync(discoveryCacheKey, CancellationToken.None);
         }
     }
 
@@ -280,6 +396,25 @@ public sealed class McpToolAdapter : IMcpToolAdapter, IAsyncDisposable
     internal static Uri CreateMcpEndpoint(string configuredBaseUrl) =>
         new($"{configuredBaseUrl.TrimEnd('/')}/mcp", UriKind.Absolute);
 
+    internal static string CreateDiscoveryCacheKey(
+        string dependencyName,
+        string configuredBaseUrl,
+        IEnumerable<string> allowedToolNames,
+        string schemaVersion)
+    {
+        var canonicalAllowList = string.Join('\n', allowedToolNames.OrderBy(name => name, StringComparer.Ordinal));
+        return string.Join(
+            ':',
+            "mcp-discovery",
+            Sha256(schemaVersion),
+            Sha256(dependencyName),
+            Sha256(CreateMcpEndpoint(configuredBaseUrl).AbsoluteUri),
+            Sha256(canonicalAllowList));
+    }
+
+    private static string Sha256(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
     public async ValueTask DisposeAsync()
     {
         await gate.WaitAsync();
@@ -291,7 +426,8 @@ public sealed class McpToolAdapter : IMcpToolAdapter, IAsyncDisposable
             }
 
             disposed = true;
-            approvedTools = null;
+            approvedToolNames = null;
+            forceDiscoveryRefresh = false;
             if (client is not null)
             {
                 await client.DisposeAsync();
