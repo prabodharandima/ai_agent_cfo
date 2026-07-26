@@ -9,6 +9,13 @@ public sealed class CacheOptions
     public bool UseDistributedCache { get; init; }
 
     public FinanceCacheOptions Finance { get; init; } = new();
+
+    public RagCacheOptions Rag { get; init; } = new();
+}
+
+public sealed class RagCacheOptions
+{
+    public int RetrievalTtlSeconds { get; init; } = 300;
 }
 
 public sealed class FinanceCacheOptions

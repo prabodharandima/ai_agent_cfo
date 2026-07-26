@@ -252,9 +252,11 @@ Before it is injected into agents, `Program.cs` wraps the client with `AgentChat
 
 ### Application cache
 
-`IApplicationCache` is the provider-neutral cache port. `HybridApplicationCache` implements it with HybridCache. `CachedFinanceMcpClient` decorates all six typed finance reads: arbitrary-period summary, current-week summary, week comparison, current-month top products, historical yearly totals, and budget target.
+`IApplicationCache` is the provider-neutral cache port. `HybridApplicationCache` implements it with HybridCache. `CachedFinanceMcpClient` decorates all six typed finance reads: arbitrary-period summary, current-week summary, week comparison, current-month top products, historical yearly totals, and budget target. `CachedFinancialKnowledgeSearch` decorates the ChromaDB retrieval port.
 
-Keys contain only a version, operation, canonical date or year/month arguments, and the injected current date where an operation is relative to "now." They never contain prompts, secrets, or finance response data. Successful values use operation-specific TTLs. Exceptions and cancellation are rethrown and are not cached. If the cache itself fails, the adapter logs the failure category and calls Finance MCP, which remains authoritative.
+Finance keys contain only a version, operation, canonical date or year/month arguments, and the injected current date where an operation is relative to "now." RAG retrieval keys contain the configured RAG index version, a SHA-256 hash of the normalized question, top-K, hashes of optional document-type and period filters, and the configured distance threshold. They never contain prompts, secrets, finance response data, or retrieved document content. Successful values use operation-specific TTLs. Exceptions and cancellation are rethrown and are not cached. If the cache itself fails, the adapter logs the failure category and calls the authoritative Finance MCP or ChromaDB dependency normally.
+
+`Rag:IndexVersion` defaults to `v1`. Change it whenever the ChromaDB index is rebuilt or its content is replaced; the changed key namespace makes existing retrieval entries unreachable without requiring a Redis flush. Source metadata, distances, warnings, and therefore later citations are preserved in the cached retrieval result.
 
 With `Cache:Enabled=false`, the adapter bypasses HybridCache. With caching enabled and `Cache:UseDistributedCache=false`, it uses only process-local memory. Compose enables the Redis backing store. Redis has no persistence or application-data volume and is not an API startup or health dependency.
 
@@ -989,6 +991,7 @@ The local and container defaults are intentionally different. Local `appsettings
 | `AgentSessions:MessageLimit` / `AgentSessions__MessageLimit` | Most recent resolved turns retained per in-memory conversation | `8` | `InMemoryAgentSessionStore` | 1 through 100 |
 | `AgentSessions:ExpirationMinutes` / `AgentSessions__ExpirationMinutes` | Sliding inactivity expiry for an in-memory conversation | `30` | `InMemoryAgentSessionStore` | 1 through 1,440 |
 | `AgentSessions:MaximumSessions` / `AgentSessions__MaximumSessions` | Maximum conversation entries in one API process | `1000` | `InMemoryAgentSessionStore` | 1 through 10,000 |
+| `Cache:Rag:RetrievalTtlSeconds` / `CACHE_RAG_RETRIEVAL_TTL_SECONDS` | Expiry for a successful ChromaDB retrieval | `300` | `CachedFinancialKnowledgeSearch` | Positive when caching is enabled |
 | `Mcp:Finance:Enabled` | Enable required Finance MCP | `true` | Finance adapter/readiness | Finance readiness is unhealthy when false |
 | `Mcp:Finance:BaseUrl` / `FINANCE_MCP_BASE_URL` | Finance MCP service address | `http://finance-mcp:8080` | Finance keyed adapter | Absolute HTTP URL when enabled |
 | `Mcp:Finance:TimeoutSeconds` | Finance MCP timeout | `10` | Finance keyed adapter | Positive |
@@ -1007,6 +1010,7 @@ The local and container defaults are intentionally different. Local `appsettings
 | `Rag:ChunkOverlapPercentage` / `RAG_CHUNK_OVERLAP_PERCENTAGE` | Percentage of each chunk repeated at the start of the next chunk | `15` | RAG ingestion | At least 0 and below 100; calculated overlap must be smaller than the chunk size |
 | `Rag:MaxKnowledgeContextCharacters` | Maximum LLM context built from retrieval | `4000` | Knowledge agent | At least 256 |
 | `Rag:MaximumRetrievalDistance` | Largest accepted Chroma distance | `1.25` | Vector-search adapter | Nonnegative |
+| `Rag:IndexVersion` / `RAG_INDEX_VERSION` | Explicit version of the indexed knowledge corpus used in RAG cache keys | `v1` | `CachedFinancialKnowledgeSearch` | Nonblank; change after re-indexing |
 
 PostgreSQL credentials and `ConnectionStrings:FinanceDatabase` are supplied only to Finance MCP and `finance-db-init`. They are deliberately absent from API configuration.
 

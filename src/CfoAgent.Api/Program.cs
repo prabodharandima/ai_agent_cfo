@@ -52,6 +52,7 @@ builder.Services.AddOptions<RagOptions>()
         "Rag:ChunkOverlapPercentage must produce an overlap smaller than Rag:MaxChunkCharacters.")
     .Validate(options => options.MaxKnowledgeContextCharacters >= 256, "Rag:MaxKnowledgeContextCharacters must be at least 256.")
     .Validate(options => options.MaximumRetrievalDistance >= 0, "Rag:MaximumRetrievalDistance must not be negative.")
+    .Validate(options => !string.IsNullOrWhiteSpace(options.IndexVersion), "Rag:IndexVersion is required.")
     .ValidateOnStart();
 
 builder.Services.AddOptions<AiOptions>()
@@ -87,8 +88,10 @@ builder.Services.AddOptions<AgentSessionOptions>()
 
 builder.Services.AddOptions<CacheOptions>()
     .BindConfiguration(CacheOptions.SectionName)
-    .Validate(options => !options.Enabled || options.Finance.AllTtlSeconds().All(seconds => seconds > 0),
-        "All enabled Finance cache TTL values must be greater than zero.")
+    .Validate(options => !options.Enabled
+        || (options.Finance.AllTtlSeconds().All(seconds => seconds > 0)
+            && options.Rag.RetrievalTtlSeconds > 0),
+        "All enabled cache TTL values must be greater than zero.")
     .Validate(options => !options.Enabled
         || !options.UseDistributedCache
         || !string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("Redis")),
@@ -174,7 +177,12 @@ builder.Services.AddSingleton<IChatClient>(serviceProvider =>
 });
 builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>, DeterministicTokenHashEmbeddingGenerator>();
 builder.Services.AddScoped<RagDocumentIngestionService>();
-builder.Services.AddScoped<IFinancialKnowledgeSearch, ChromaFinancialKnowledgeSearch>();
+builder.Services.AddScoped<ChromaFinancialKnowledgeSearch>();
+builder.Services.AddScoped<IFinancialKnowledgeSearch>(serviceProvider => new CachedFinancialKnowledgeSearch(
+    serviceProvider.GetRequiredService<ChromaFinancialKnowledgeSearch>(),
+    serviceProvider.GetRequiredService<IApplicationCache>(),
+    serviceProvider.GetRequiredService<IOptions<CacheOptions>>(),
+    serviceProvider.GetRequiredService<IOptions<RagOptions>>()));
 builder.Services.AddScoped<FinancialKnowledgeContextProvider>();
 builder.Services.AddHttpClient(McpToolAdapter.FinanceHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddHttpClient(McpToolAdapter.KnowledgeFilesHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);

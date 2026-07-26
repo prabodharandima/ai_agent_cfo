@@ -14,6 +14,8 @@ public sealed class RagOptions
 
     public float MaximumRetrievalDistance { get; init; } = 1.25f;
 
+    public string IndexVersion { get; init; } = "v1";
+
     public int GetChunkOverlapSize()
     {
         if (MaxChunkCharacters <= 0)
