@@ -147,7 +147,7 @@ public sealed class ContainerIntegrationTests
     private static HttpClient CreateHttpClient(string environmentVariable) => new()
     {
         BaseAddress = GetBaseUri(environmentVariable),
-        Timeout = TimeSpan.FromSeconds(30)
+        Timeout = TimeSpan.FromSeconds(90)
     };
 
     private static async Task<McpClient> CreateMcpClientAsync(string environmentVariable)

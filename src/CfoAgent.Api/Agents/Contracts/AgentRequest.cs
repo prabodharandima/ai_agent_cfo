@@ -1,3 +1,3 @@
 namespace CfoAgent.Api.Agents.Contracts;
 
-public sealed record AgentRequest(string Message);
+public sealed record AgentRequest(string Message, AgentSessionContext? SessionContext = null);

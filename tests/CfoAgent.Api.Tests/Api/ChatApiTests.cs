@@ -4,7 +4,9 @@ using System.Text;
 using System.Text.Json;
 using CfoAgent.Api.AI;
 using CfoAgent.Api.AI.Ollama;
+using CfoAgent.Api.Agents.Contracts;
 using CfoAgent.Api.Configuration;
+using CfoAgent.Api.Features.Chat;
 using CfoAgent.Api.Features.Sales;
 using CfoAgent.Api.Health;
 using CfoAgent.Api.Mcp;
@@ -126,6 +128,42 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
         Assert.Equal("cleanup-contract-001", document.RootElement.GetProperty("conversationId").GetString());
     }
 
+    [Fact]
+    public async Task PostChat_RetainsMetadataForTheSameConversationId()
+    {
+        using var client = _factory.CreateClient();
+
+        await client.PostAsJsonAsync(
+            "/api/chat",
+            new { conversationId = "maf-session-continuity", message = "Give me the sales summary of this week." });
+        await client.PostAsJsonAsync(
+            "/api/chat",
+            new { conversationId = "maf-session-continuity", message = "Give me the sales forecast for the next five years." });
+
+        var store = _factory.Services.GetRequiredService<InMemoryAgentSessionStore>();
+        Assert.Equal(
+            [AgentResponseType.SalesSummary, AgentResponseType.Forecast],
+            store.GetContext("maf-session-continuity").Turns.Select(turn => turn.ResponseType));
+    }
+
+    [Fact]
+    public async Task PostChat_GeneratesIsolatedSessionsWhenConversationIdIsMissing()
+    {
+        using var client = _factory.CreateClient();
+
+        using var first = await client.PostAsJsonAsync("/api/chat", new { message = "Give me the sales summary of this week." });
+        using var second = await client.PostAsJsonAsync("/api/chat", new { message = "Give me the sales forecast for the next five years." });
+        using var firstDocument = JsonDocument.Parse(await first.Content.ReadAsStringAsync());
+        using var secondDocument = JsonDocument.Parse(await second.Content.ReadAsStringAsync());
+        var firstId = firstDocument.RootElement.GetProperty("conversationId").GetString()!;
+        var secondId = secondDocument.RootElement.GetProperty("conversationId").GetString()!;
+
+        Assert.NotEqual(firstId, secondId);
+        var store = _factory.Services.GetRequiredService<InMemoryAgentSessionStore>();
+        Assert.Equal(AgentResponseType.SalesSummary, Assert.Single(store.GetContext(firstId).Turns).ResponseType);
+        Assert.Equal(AgentResponseType.Forecast, Assert.Single(store.GetContext(secondId).Turns).ResponseType);
+    }
+
     [Theory]
     [InlineData("{\"message\":\"   \"}")]
     [InlineData("{}")]
@@ -207,6 +245,91 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
     }
 
     [Fact]
+    public async Task PostChatStream_EmitsSafeProgressAnswerAndCompletionEventsInOrder()
+    {
+        using var client = _factory.CreateClient();
+
+        using var response = await client.PostAsJsonAsync(
+            "/api/chat/stream",
+            new { conversationId = "maf-stream-004", message = "Give me the sales summary of this week." });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("text/event-stream", response.Content.Headers.ContentType?.MediaType);
+        var events = ParseServerSentEvents(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal("progress", events[0].Name);
+        Assert.Equal("progress", events[1].Name);
+        Assert.Equal("progress", events[2].Name);
+        Assert.Equal("progress", events[^2].Name);
+        Assert.Equal("completed", events[^1].Name);
+        Assert.All(events.Skip(3).Take(events.Count - 5), @event => Assert.Equal("content", @event.Name));
+        Assert.Equal(
+            ["classifying", "retrieving", "generating", "completed"],
+            events.Where(@event => @event.Name == "progress")
+                .Select(@event => @event.Payload.GetProperty("stage").GetString()));
+
+        var content = string.Concat(events.Where(@event => @event.Name == "content")
+            .Select(@event => @event.Payload.GetProperty("text").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(content));
+        Assert.DoesNotContain("RETRIEVED_CONTEXT:", content, StringComparison.Ordinal);
+        Assert.DoesNotContain("VERIFIED_DATA:", content, StringComparison.Ordinal);
+
+        var completion = Assert.Single(events, @event => @event.Name == "completed").Payload;
+        Assert.Equal("maf-stream-004", completion.GetProperty("conversationId").GetString());
+        Assert.Equal("sales_summary", completion.GetProperty("responseType").GetString());
+        Assert.Contains("CfoOrchestratorAgent", completion.GetProperty("agentNames").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal("Ollama", completion.GetProperty("model").GetProperty("provider").GetString());
+        Assert.False(completion.TryGetProperty("answer", out _));
+    }
+
+    [Fact]
+    public async Task PostChatStream_ReturnsOnlyASanitizedErrorEventWhenTheAgentFails()
+    {
+        await using var factory = ChatApiFactory.CreateFailing();
+        using var client = factory.CreateClient();
+
+        using var response = await client.PostAsJsonAsync("/api/chat/stream", new { message = "Give me the sales summary of this week." });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var responseBody = await response.Content.ReadAsStringAsync();
+        var events = ParseServerSentEvents(responseBody);
+        var error = Assert.Single(events, @event => @event.Name == "error").Payload;
+        Assert.Equal(503, error.GetProperty("status").GetInt32());
+        Assert.Equal("The selected model provider is temporarily unavailable.", error.GetProperty("title").GetString());
+        Assert.DoesNotContain("stackTrace", responseBody, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("localhost", error.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PostChatStream_PropagatesCallerCancellation()
+    {
+        await using var factory = ChatApiFactory.CreateDelayed(TimeSpan.FromSeconds(5));
+        using var client = factory.CreateClient();
+        using var cancellationSource = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.PostAsJsonAsync(
+            "/api/chat/stream",
+            new { message = "Give me the sales summary of this week." },
+            cancellationSource.Token));
+    }
+
+    [Fact]
+    public async Task PostChat_DoesNotRecordCancelledRequests()
+    {
+        await using var factory = ChatApiFactory.CreateDelayed(TimeSpan.FromSeconds(5));
+        using var client = factory.CreateClient();
+        using var cancellationSource = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.PostAsJsonAsync(
+            "/api/chat",
+            new { conversationId = "maf-session-cancelled", message = "Give me the sales summary of this week." },
+            cancellationSource.Token));
+
+        var store = factory.Services.GetRequiredService<InMemoryAgentSessionStore>();
+        Assert.Empty(store.GetContext("maf-session-cancelled").Turns);
+    }
+
+    [Fact]
     public async Task ReadyHealthEndpointReportsChromaAndMcpConfiguration()
     {
         using var client = _factory.CreateClient();
@@ -221,27 +344,48 @@ public sealed class ChatApiTests : IClassFixture<ChatApiFactory>
         Assert.Contains("chroma", dependencies);
         Assert.Contains("mcp", dependencies);
     }
+
+    private static IReadOnlyList<ServerSentEvent> ParseServerSentEvents(string content)
+    {
+        var events = new List<ServerSentEvent>();
+        foreach (var block in content.Split("\n\n", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var lines = block.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var name = Assert.Single(lines, line => line.StartsWith("event: ", StringComparison.Ordinal)).Substring("event: ".Length);
+            var data = Assert.Single(lines, line => line.StartsWith("data: ", StringComparison.Ordinal)).Substring("data: ".Length);
+            using var document = JsonDocument.Parse(data);
+            events.Add(new ServerSentEvent(name, document.RootElement.Clone()));
+        }
+
+        return events;
+    }
+
+    private sealed record ServerSentEvent(string Name, JsonElement Payload);
 }
 
 public sealed class ChatApiFactory : WebApplicationFactory<Program>
 {
     private readonly bool _simulateLlmFailure;
     private readonly bool _simulateFinanceDependencyFailure;
+    private readonly TimeSpan? _responseDelay;
 
     public ChatApiFactory()
-        : this(simulateLlmFailure: false, simulateFinanceDependencyFailure: false)
+        : this(simulateLlmFailure: false, simulateFinanceDependencyFailure: false, responseDelay: null)
     {
     }
 
-    private ChatApiFactory(bool simulateLlmFailure, bool simulateFinanceDependencyFailure)
+    private ChatApiFactory(bool simulateLlmFailure, bool simulateFinanceDependencyFailure, TimeSpan? responseDelay)
     {
         _simulateLlmFailure = simulateLlmFailure;
         _simulateFinanceDependencyFailure = simulateFinanceDependencyFailure;
+        _responseDelay = responseDelay;
     }
 
-    public static ChatApiFactory CreateFailing() => new(simulateLlmFailure: true, simulateFinanceDependencyFailure: false);
+    public static ChatApiFactory CreateFailing() => new(simulateLlmFailure: true, simulateFinanceDependencyFailure: false, responseDelay: null);
 
-    public static ChatApiFactory CreateFinanceDependencyFailing() => new(simulateLlmFailure: false, simulateFinanceDependencyFailure: true);
+    public static ChatApiFactory CreateFinanceDependencyFailing() => new(simulateLlmFailure: false, simulateFinanceDependencyFailure: true, responseDelay: null);
+
+    public static ChatApiFactory CreateDelayed(TimeSpan responseDelay) => new(simulateLlmFailure: false, simulateFinanceDependencyFailure: false, responseDelay);
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -272,7 +416,9 @@ public sealed class ChatApiFactory : WebApplicationFactory<Program>
 
     private IChatClient CreateTestChatClient() => _simulateLlmFailure
         ? new TestChatClient((_, _, _) => Task.FromException<string>(new AiProviderException("Ollama", AiProviderFailureKind.Unavailable)))
-        : new TestChatClient();
+        : _responseDelay is { } responseDelay
+            ? TestChatClient.CreateMvp(responseDelay)
+            : new TestChatClient();
 
     private sealed class TestFinanceMcpClient(bool simulateFailure) : IFinanceMcpRemoteClient
     {

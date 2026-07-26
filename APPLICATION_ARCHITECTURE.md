@@ -44,17 +44,17 @@ The LLM does not choose the database, MCP server, MCP tool, or financial calcula
 
 ## 3. Main building blocks
 
-| Building block | What it does | Relationship to `CfoAgent.Api` |
-|---|---|---|
-| React frontend | Collects questions and displays answers, structured values, warnings, and citations | Sends `POST /api/chat`; Nginx proxies `/api/` to the API in Docker |
-| `CfoAgent.Api` | Validates requests, classifies intent, routes work, calls integrations, calculates forecasts, composes results, and translates errors | Main business and orchestration application |
-| Finance MCP | Offers five read-only finance tools over MCP | API calls it through `FinanceMcpClient` and `McpToolAdapter` |
-| Knowledge File MCP | Offers two restricted read-only file tools | API registers clients and checks readiness; current knowledge chat does not call it |
-| RAG initializer | One-shot `CfoAgent.Api --ingest-rag` process that reads Markdown and loads ChromaDB | Runs before the API container starts; it is not a chat request |
-| ChromaDB | Stores and searches indexed finance-document chunks | `FinancialKnowledgeAgent` reaches it through `IFinancialKnowledgeSearch` |
-| PostgreSQL | Stores products, sales, and budget targets | Owned and accessed only by Finance MCP |
-| Ollama | Local language model running on Windows | The only runtime `IChatClient`; API containers reach it through `host.docker.internal` |
-| pgAdmin | Optional browser administration tool for PostgreSQL | Operational tool only; not part of an application request |
+| Building block     | What it does                                                                                                                          | Relationship to `CfoAgent.Api`                                                         |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| React frontend     | Collects questions and displays answers, structured values, warnings, and citations                                                   | Sends `POST /api/chat`; Nginx proxies `/api/` to the API in Docker                     |
+| `CfoAgent.Api`     | Validates requests, classifies intent, routes work, calls integrations, calculates forecasts, composes results, and translates errors | Main business and orchestration application                                            |
+| Finance MCP        | Offers five read-only finance tools over MCP                                                                                          | API calls it through `FinanceMcpClient` and `McpToolAdapter`                           |
+| Knowledge File MCP | Offers two restricted read-only file tools                                                                                            | API registers clients and checks readiness; current knowledge chat does not call it    |
+| RAG initializer    | One-shot `CfoAgent.Api --ingest-rag` process that reads Markdown and loads ChromaDB                                                   | Runs before the API container starts; it is not a chat request                         |
+| ChromaDB           | Stores and searches indexed finance-document chunks                                                                                   | `FinancialKnowledgeAgent` reaches it through `IFinancialKnowledgeSearch`               |
+| PostgreSQL         | Stores products, sales, and budget targets                                                                                            | Owned and accessed only by Finance MCP                                                 |
+| Ollama             | Local language model running on Windows                                                                                               | The only runtime `IChatClient`; API containers reach it through `host.docker.internal` |
+| pgAdmin            | Optional browser administration tool for PostgreSQL                                                                                   | Operational tool only; not part of an application request                              |
 
 ```mermaid
 flowchart LR
@@ -81,7 +81,7 @@ The dotted Knowledge MCP line is intentional. It represents an available operati
 
 ### Receive and validate prompts
 
-`ChatEndpoints.MapChatEndpoints` maps `POST /api/chat`. `HandleAsync` rejects a missing, blank, or longer-than-4,000-character message. It preserves a supplied conversation ID or creates one. Source: `src/CfoAgent.Api/Features/Chat/ChatEndpoints.cs`.
+`ChatEndpoints.MapChatEndpoints` maps the default `POST /api/chat` JSON endpoint and the optional `POST /api/chat/stream` Server-Sent Events (SSE) endpoint. Both reject a missing, blank, or longer-than-4,000-character message and preserve a supplied conversation ID or create one. `POST /api/chat` remains unchanged and is the default for clients that want one JSON response. Source: `src/CfoAgent.Api/Features/Chat/ChatEndpoints.cs`.
 
 ### Classify the request
 
@@ -109,7 +109,7 @@ The selected specialist determines the dependency:
 
 ### Compose the final answer
 
-Each specialist creates an `AgentResult`. `AgentResultComposer` returns a single result unchanged or combines Forecast and Knowledge results once. `ChatResponse.FromAgentResult` maps the result to the public JSON contract.
+Each specialist creates an `AgentResult`. `AgentResultComposer` returns a single result unchanged or combines Forecast and Knowledge results once. `ChatResponse.FromAgentResult` maps the result to the public JSON contract. The SSE endpoint streams only the already-composed public answer text, then sends a metadata-only completion event; it does not stream raw model prompts, retrieved context, or MCP payloads.
 
 ### Return errors safely
 
@@ -117,7 +117,42 @@ Each specialist creates an `AgentResult`. `AgentResultComposer` returns a single
 
 ### Handle cancellation
 
-`ChatEndpoints.HandleAsync` passes `HttpContext.RequestAborted` through the orchestrator, specialists, MCP calls, vector search, and LLM calls. Caller cancellation is rethrown and is not converted to a fallback or dependency 503.
+`ChatEndpoints.HandleAsync` and `HandleStreamAsync` pass `HttpContext.RequestAborted` through the orchestrator, specialists, MCP calls, vector search, and LLM calls. Caller cancellation is rethrown and is not converted to a fallback or dependency 503.
+
+### Optional streaming response
+
+`POST /api/chat/stream` uses SSE, a standard HTTP response that sends named events over one request. It emits these safe events in order:
+
+1. `progress` with `classifying`.
+2. `progress` with `retrieving`.
+3. `progress` with `generating`.
+4. One or more `content` events containing only public answer text.
+5. `progress` with `completed`.
+6. `completed` with response type, agent names, citations, assumptions, warnings, data period, model, and conversation ID. It intentionally omits the answer because it was delivered in the preceding `content` events.
+
+If validation fails before SSE starts, the endpoint returns the same HTTP 400 Problem Details format as `POST /api/chat`. If a dependency fails after SSE begins, it sends one sanitized `error` event with only a status and safe title; it never exposes an exception message, stack trace, prompt, raw RAG context, or raw MCP response. The Ollama adapter and the Microsoft Agent Framework-compatible `AgentChatMiddleware` both support `IChatClient.GetStreamingResponseAsync`; the endpoint keeps the established orchestrator and composed-result flow authoritative rather than asking the model to regenerate finance results solely for transport streaming.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant HTTP as ChatEndpoints
+    participant CFO as CfoOrchestratorAgent
+    participant Workers as Specialist agents
+
+    Client->>HTTP: POST /api/chat/stream
+    HTTP-->>Client: progress: classifying
+    HTTP->>CFO: ClassifyAsync(message)
+    CFO-->>HTTP: CfoIntent
+    HTTP-->>Client: progress: retrieving
+    HTTP->>CFO: HandleClassifiedAsync(message, intent)
+    CFO->>Workers: Retrieve data and compose result
+    Workers-->>CFO: AgentResult
+    CFO-->>HTTP: Composed AgentResult
+    HTTP-->>Client: progress: generating
+    HTTP-->>Client: content events (public answer only)
+    HTTP-->>Client: progress: completed
+    HTTP-->>Client: completed event (safe metadata)
+```
 
 ## 5. Internal architecture of CfoAgent.Api
 
@@ -143,6 +178,7 @@ flowchart TB
     FinancePort[IFinanceMcpClient port]
     VectorPort[IFinancialKnowledgeSearch port]
 
+    ChatMiddleware[AgentChatMiddleware]
     Ollama[OllamaChatClient]
     FinanceClient[FinanceMcpClient]
     McpAdapter[McpToolAdapter]
@@ -164,16 +200,22 @@ flowchart TB
     Forecast --> FinancePort
     Knowledge --> VectorPort
 
-    ChatPort --> Ollama
+    ChatPort --> ChatMiddleware --> Ollama
     FinancePort --> FinanceClient --> McpAdapter
     VectorPort --> ChromaAdapter --> ChromaClient
 ```
 
 ### HTTP endpoint
 
-`ChatEndpoints` owns HTTP concerns only: request validation, conversation ID handling, cancellation source, and response mapping. It contains no agent-routing, MCP, ChromaDB, PostgreSQL, or Ollama-specific logic.
+`ChatEndpoints` owns HTTP concerns only: request validation, conversation ID handling, bounded session lookup/recording, cancellation source, and response mapping. It contains no agent-routing, MCP, ChromaDB, PostgreSQL, or Ollama-specific logic.
 
 On success, the public response contains the prose answer, a stable response type, the agent names, authoritative structured data when available, citations for knowledge answers, assumptions, warnings, the data period, and the selected provider/model. The endpoint maps these values; it does not calculate them.
+
+### Bounded agent sessions
+
+`InMemoryAgentSessionStore` uses the existing `conversationId` as its key. It follows the Microsoft Agent Framework session concept without delegating history storage to the model provider: each in-memory entry holds only the prior resolved response type and optional date period. `ChatEndpoints` supplies this compact context to `CfoOrchestratorAgent.ClassifyAsync` and records a turn only after a successful normal response or completed SSE response. It does not retain user prompts, answers, raw RAG chunks, MCP payloads, credentials, or authorization state.
+
+Sessions are isolated per conversation ID, expire after inactivity, retain only the configured number of most recent turns, and are removed when the API process restarts. They cannot authorize tools, alter MCP allow-lists, or change deterministic financial calculations.
 
 ### CFO orchestrator
 
@@ -187,7 +229,13 @@ On success, the public response contains the prose answer, a stable response typ
 
 ### LLM abstraction
 
-Application code depends on `Microsoft.Extensions.AI.IChatClient`. At startup, the composition root reads `AI:Provider`, creates a provider-neutral `AiProviderDescriptor`, and registers the matching runtime client. Ollama is the only registered provider today, implemented by `OllamaChatClient`. Tests inject test-local `IChatClient` doubles, and agents do not contain provider transport code.
+Application code depends on `Microsoft.Extensions.AI.IChatClient` from `Microsoft.Extensions.AI.Abstractions` 10.8.0. The bounded framework features use `Microsoft.Agents.AI` 1.13.0. At startup, the composition root reads `AI:Provider`, creates a provider-neutral `AiProviderDescriptor`, and registers the matching runtime client. Ollama is the only registered provider today, implemented by `OllamaChatClient`.
+
+Before it is injected into agents, `Program.cs` wraps the client with `AgentChatMiddleware` through the Microsoft Agent Framework-compatible `IChatClient` middleware pipeline. The middleware measures each non-streaming call, uses the request correlation ID for safe structured logs, blocks configured suspicious phrases, and redacts common sensitive values from text responses. It does not classify a request, select an agent, select an MCP server or tool, construct finance arguments, or replace `ApiExceptionHandler`. `PromptInjectionRiskException` is translated centrally to a sanitized HTTP 400 response. Tests inject test-local `IChatClient` doubles, and agents do not contain provider transport code.
+
+### OpenTelemetry-compatible observability
+
+`Observability/AgentActivityTracing.cs` publishes standard .NET `ActivitySource` spans and `Meter` metrics. Instrumentation covers the chat request, intent classification, specialist execution, LLM calls, Finance and Knowledge MCP operations, ChromaDB retrieval, and result composition. Each signal is restricted to safe operational attributes: correlation ID, operation, agent, provider, model, outcome, and duration. It deliberately excludes prompts, answers, MCP arguments/results, retrieved chunks, raw finance data, secrets, and connection strings. No exporter is required or enabled for normal execution; a deployment can subscribe to the standard source and meter with its chosen OpenTelemetry exporter without changing application behavior.
 
 ### MCP adapter and typed client
 
@@ -207,7 +255,7 @@ Application code depends on `Microsoft.Extensions.AI.IChatClient`. At startup, t
 
 ### Error handling
 
-`RequestCorrelationMiddleware` assigns a safe correlation ID and logs request timing. `ApiExceptionHandler` translates known exceptions into sanitized HTTP responses.
+`RequestCorrelationMiddleware` assigns a safe correlation ID and logs HTTP request timing. `AgentChatMiddleware` adds safe per-LLM-call timing and metadata logging. `ApiExceptionHandler` translates known exceptions into sanitized HTTP responses.
 
 ## 6. End-to-end request flow
 
@@ -225,9 +273,12 @@ flowchart TD
     E -->|Mixed| I[Forecasting plus Knowledge]
     E -->|Unsupported| U[Return scoped unsupported result]
 
-    F --> DatePrompt[6. Ask LLM for JSON start/end dates]
-    DatePrompt --> DateValidation[7. Validate or canonicalize standard relative periods in C#]
-    DateValidation --> J[8. Identify fixed Finance MCP operation]
+    F --> FD{6. Current-week request?}
+    FD -->|yes| J[7. Identify Finance MCP operation]
+    FD -->|no| FP[7. LLM proposes structured date range]
+    FP --> FV[8. C# validates and canonicalizes dates]
+    FV -->|valid| J
+    FV -->|invalid| X503[Return sanitized provider dependency problem]
     G --> J
     H --> K[6. Identify ChromaDB retrieval]
     I --> J
@@ -247,24 +298,24 @@ flowchart TD
     S --> T[Return JSON response]
 ```
 
-The LLM is used twice for most requests: once for bounded intent classification and once by the selected specialist to phrase verified information. Sales summaries add one bounded date-range interpretation call that returns only JSON. C# canonicalizes standard relative phrases such as "this week" and "last week" and validates other ranges before querying Finance MCP. There is no extra final LLM composition call.
+The LLM is used for bounded intent classification and by specialists to phrase verified information. For a sales-summary request that is not explicitly for the current week, it also proposes a JSON date range. C# parses, bounds, and canonicalizes that proposal before Finance MCP is called. There is no extra final LLM composition call.
 
 ## 7. How the system decides what to do
 
 The four decisions below are deliberately separate. Keeping them separate prevents a language model from making infrastructure or financial decisions.
 
-| Decision | Current decision maker | Example | What the LLM does not decide |
-|---|---|---|---|
-| Intent | `CfoOrchestratorAgent` with a bounded `IChatClient` answer and keyword fallback | `Forecast` | Which database or tool to call |
-| Specialist agent | Explicit C# switch in the orchestrator | `ForecastingAgent` | Whether to invent a new agent or workflow |
-| MCP server | The selected agent's injected port | Finance MCP for Sales/Forecasting | Which endpoint to contact |
-| MCP tool and arguments | Typed client method plus the MCP allow-list | `get_historical_sales` with five deterministic years | Tool name, limits, or financial values. Sales-summary dates are an exception: the LLM proposes them, then C# validates and canonicalizes them. |
+| Decision               | Current decision maker                                                          | Example                                              | What the LLM does not decide                                                                                                      |
+| ---------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Intent                 | `CfoOrchestratorAgent` with a bounded `IChatClient` answer and keyword fallback | `Forecast`                                           | Which database or tool to call                                                                                                    |
+| Specialist agent       | Explicit C# switch in the orchestrator                                          | `ForecastingAgent`                                   | Whether to invent a new agent or workflow                                                                                         |
+| MCP server             | The selected agent's injected port                                              | Finance MCP for Sales/Forecasting                    | Which endpoint to contact                                                                                                         |
+| MCP tool and arguments | Typed client method plus the MCP allow-list                                     | `get_historical_sales` with five deterministic years | Tool name, limits, or financial values; a non-current sales-summary date proposal is validated and canonicalized in C# before use |
 
 ### 7.1 How intent is identified
 
 Intent identification is hybrid.
 
-First, `CfoOrchestratorAgent.ClassifyAsync` sends a prompt through the configured `IChatClient`. The prompt allows only:
+First, `CfoOrchestratorAgent.ClassifyAsync` sends a schema-bound prompt through the configured `IChatClient`. `ChatResponseFormat.ForJsonSchema<IntentClassificationOutput>` asks the provider for JSON with one `intent` property. The allowed values are:
 
 - `SalesSummary`
 - `SalesComparison`
@@ -274,25 +325,33 @@ First, `CfoOrchestratorAgent.ClassifyAsync` sends a prompt through the configure
 - `Mixed`
 - `Unsupported`
 
-The response must exactly match one enum name and must be no longer than 64 characters.
+The API parses the JSON and accepts only a known non-`Unsupported` enum value. The bounded response is limited to 256 characters.
 
 If that response is not valid, `ClassifyDeterministically` applies keyword rules. For example, `COMPARE` or `VERSUS` means Sales Comparison; `TOP` plus `PRODUCT` means Top Products; and `FORECAST` plus `TARGET`, `ASSUMPTION`, or `RISK` means Mixed.
 
 This fallback handles malformed model output. It does not handle an unavailable LLM: provider exceptions propagate.
 
+### 7.1.1 How sales-summary dates are interpreted
+
+`SalesAnalysisAgent.GetWeeklySummaryAsync` retains the deterministic current-week path for requests that explicitly say `this week` or `current week`: it calls `IFinanceMcpClient.GetCurrentWeekSummaryAsync`.
+
+For another sales-summary period, `ResolveSalesSummaryPeriodAsync` asks the configured `IChatClient` for `SalesSummaryDateRangeOutput` JSON containing inclusive `startDate` and `endDate` values in `YYYY-MM-DD` format. The model only proposes the dates. Before any Finance MCP call, C# requires both dates to parse exactly, rejects future dates, requires `endDate >= startDate`, and limits the inclusive range to 366 days. It then converts the parsed `DateOnly` values back to canonical `YYYY-MM-DD` Finance MCP arguments.
+
+Malformed or unsafe date output is treated as an invalid model response and is returned through the existing sanitized provider-failure path. It never reaches Finance MCP. The model still does not calculate or alter revenue, profit, rankings, forecasts, or any other authoritative finance value.
+
 ### 7.2 How the specialist agent is selected
 
 Selection is an explicit switch in `CfoOrchestratorAgent.HandleAsync`.
 
-| Intent | Selected work |
-|---|---|
-| Sales Summary | `SalesAnalysisAgent.GetWeeklySummaryAsync` |
-| Sales Comparison | `SalesAnalysisAgent.GetWeekOverWeekComparisonAsync` |
-| Top Products | `SalesAnalysisAgent.GetCurrentMonthTopProductsAsync` |
-| Forecast | `ForecastingAgent.GetForecastAsync` |
-| Knowledge | `FinancialKnowledgeAgent.AnswerAsync` |
-| Mixed | Forecasting and Financial Knowledge, awaited with `Task.WhenAll` |
-| Unsupported | No specialist; return a fixed supported-scope message |
+| Intent           | Selected work                                                    |
+| ---------------- | ---------------------------------------------------------------- |
+| Sales Summary    | `SalesAnalysisAgent.GetWeeklySummaryAsync`                       |
+| Sales Comparison | `SalesAnalysisAgent.GetWeekOverWeekComparisonAsync`              |
+| Top Products     | `SalesAnalysisAgent.GetCurrentMonthTopProductsAsync`             |
+| Forecast         | `ForecastingAgent.GetForecastAsync`                              |
+| Knowledge        | `FinancialKnowledgeAgent.AnswerAsync`                            |
+| Mixed            | Forecasting and Financial Knowledge, awaited with `Task.WhenAll` |
+| Unsupported      | No specialist; return a fixed supported-scope message            |
 
 There is no agent registry, plugin discovery, planner, or dynamic workflow engine.
 
@@ -319,18 +378,17 @@ What is dynamic:
 
 What is fixed in application logic:
 
-| Typed method | Hard-coded MCP tool |
-|---|---|
-| `GetSalesSummaryAsync(SalesPeriod)` | `get_sales_summary` |
-| `GetCurrentWeekSummaryAsync` | `get_sales_summary` |
-| `GetWeekOverWeekComparisonAsync` | `compare_sales_periods` |
-| `GetCurrentMonthTopProductsAsync` | `get_top_products` |
-| `GetHistoricalYearlyTotalsAsync` | `get_historical_sales` |
-| `GetBudgetTargetAsync` | `get_budget_target` |
-| `KnowledgeFileMcpHttpClient.ListFilesAsync` | `list_knowledge_files` |
-| `KnowledgeFileMcpHttpClient.ReadFileAsync` | `read_knowledge_file` |
+| Typed method                                | Hard-coded MCP tool     |
+| ------------------------------------------- | ----------------------- |
+| `GetCurrentWeekSummaryAsync`                | `get_sales_summary`     |
+| `GetWeekOverWeekComparisonAsync`            | `compare_sales_periods` |
+| `GetCurrentMonthTopProductsAsync`           | `get_top_products`      |
+| `GetHistoricalYearlyTotalsAsync`            | `get_historical_sales`  |
+| `GetBudgetTargetAsync`                      | `get_budget_target`     |
+| `KnowledgeFileMcpHttpClient.ListFilesAsync` | `list_knowledge_files`  |
+| `KnowledgeFileMcpHttpClient.ReadFileAsync`  | `read_knowledge_file`   |
 
-Discovered tools are not passed to the LLM in the current agent flow. The LLM does not choose the final tool. The only Finance-argument exception is Sales Summary: it proposes `startDate` and `endDate` as JSON. `SalesAnalysisAgent` canonicalizes standard relative phrases such as "this week" and validates other ranges for ISO format, date ordering, and the non-future boundary before `FinanceMcpClient` sends canonical arguments to `get_sales_summary`.
+Discovered tools are not passed to the LLM in the current agent flow. The LLM does not choose the final tool. It also does not create Finance tool arguments.
 
 The generic adapter can call another discovered and approved tool by name without adding an adapter method, but that alone does not make the tool available to a chat scenario. A business route or typed operation would still have to request it.
 
@@ -631,13 +689,13 @@ Finance MCP provides read-only access to structured finance information. It is h
 
 ### Finance tool catalog
 
-| Tool | Purpose | Inputs | Result | Example question |
-|---|---|---|---|---|
-| `get_sales_summary` | Summarize one period up to 366 days | `startDate`, `endDate` as `YYYY-MM-DD` | Revenue, cost, profit, margin, quantity, orders, AOV, top product, warnings | "Give me this week's sales summary." |
-| `compare_sales_periods` | Compare two periods | Current and previous start/end dates | Two summaries, change, percentage, direction, warnings | "Compare this week with last week." |
-| `get_top_products` | Rank products by net revenue | Start date, end date, limit 1-20 | Period and ranked products | "Show this month's top five products." |
-| `get_historical_sales` | Return complete yearly totals | Start year and end year, at most five years | Ordered yearly net revenue totals | "Forecast sales for five years." |
-| `get_budget_target` | Read an annual or monthly target | Year and optional month | Availability, sales/profit targets, reference, warnings | No current chat agent invokes this tool |
+| Tool                    | Purpose                             | Inputs                                      | Result                                                                      | Example question                        |
+| ----------------------- | ----------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------- |
+| `get_sales_summary`     | Summarize one period up to 366 days | `startDate`, `endDate` as `YYYY-MM-DD`      | Revenue, cost, profit, margin, quantity, orders, AOV, top product, warnings | "Give me this week's sales summary."    |
+| `compare_sales_periods` | Compare two periods                 | Current and previous start/end dates        | Two summaries, change, percentage, direction, warnings                      | "Compare this week with last week."     |
+| `get_top_products`      | Rank products by net revenue        | Start date, end date, limit 1-20            | Period and ranked products                                                  | "Show this month's top five products."  |
+| `get_historical_sales`  | Return complete yearly totals       | Start year and end year, at most five years | Ordered yearly net revenue totals                                           | "Forecast sales for five years."        |
+| `get_budget_target`     | Read an annual or monthly target    | Year and optional month                     | Availability, sales/profit targets, reference, warnings                     | No current chat agent invokes this tool |
 
 ### PostgreSQL ownership
 
@@ -670,10 +728,10 @@ Compose runs `finance-db-init --seed` once before Finance MCP starts. Seeding is
 
 Knowledge File MCP provides restricted raw access to files under one configured directory. It is not a semantic search engine and does not replace ChromaDB.
 
-| Tool | Purpose | Input | Result |
-|---|---|---|---|
-| `list_knowledge_files` | List files recursively | None | Sorted relative paths |
-| `read_knowledge_file` | Read one allowed file | Relative path | File text or typed missing-file failure |
+| Tool                   | Purpose                | Input         | Result                                  |
+| ---------------------- | ---------------------- | ------------- | --------------------------------------- |
+| `list_knowledge_files` | List files recursively | None          | Sorted relative paths                   |
+| `read_knowledge_file`  | Read one allowed file  | Relative path | File text or typed missing-file failure |
 
 ### Knowledge directory and read-only behavior
 
@@ -748,16 +806,16 @@ flowchart LR
 
 `DeterministicTokenHashEmbeddingGenerator` is the only registered embedding provider.
 
-| Property | Actual implementation |
-|---|---|
-| Provider | Local C# implementation, not Ollama or a cloud model |
-| Dimension | 256 numbers |
-| Tokenization | Lowercase sequences of letters and digits |
-| Hash | 32-bit FNV-1a over each token's UTF-8 bytes |
-| Bucket | Hash modulo 256 |
-| Value | Add +1 or -1 based on one hash bit |
-| Normalization | Divide non-empty vector by its Euclidean length |
-| Determinism | Same text always produces the same vector |
+| Property      | Actual implementation                                |
+| ------------- | ---------------------------------------------------- |
+| Provider      | Local C# implementation, not Ollama or a cloud model |
+| Dimension     | 256 numbers                                          |
+| Tokenization  | Lowercase sequences of letters and digits            |
+| Hash          | 32-bit FNV-1a over each token's UTF-8 bytes          |
+| Bucket        | Hash modulo 256                                      |
+| Value         | Add +1 or -1 based on one hash bit                   |
+| Normalization | Divide non-empty vector by its Euclidean length      |
+| Determinism   | Same text always produces the same vector            |
 
 Example document chunk:
 
@@ -775,11 +833,17 @@ The API asks ChromaDB for documents, metadata, and distances. `ChromaFinancialKn
 
 The collection creation code does not specify the exact Chroma distance metric. This document therefore does not claim cosine, Euclidean, or another metric.
 
+### Bounded RAG context
+
+`FinancialKnowledgeContextProvider` is a scoped Microsoft Agent Framework `AIContextProvider`. It calls the existing `IFinancialKnowledgeSearch` port, preserves the retrieval result for the knowledge response and citations, then prepares the transient text supplied to the LLM. It keeps the existing maximum `Rag:MaxKnowledgeContextCharacters`, includes source metadata headers, removes duplicate chunk IDs and normalized duplicate chunk text, and never logs or persists the prepared text.
+
+The provider returns retrieved text as untrusted reference material. `AgentPromptTemplates.ForKnowledge` explicitly tells the model not to follow instructions, tool requests, or role changes contained in that text. The provider adds no tools and does not give retrieved content authority over routing, MCP operations, finance values, or authorization.
+
 ### No relevant result
 
 If the collection does not exist, retrieval returns "No financial knowledge has been ingested." If no result survives validation and the distance threshold, it returns "No sufficiently relevant financial knowledge was found."
 
-`FinancialKnowledgeAgent` then returns a fixed insufficient-knowledge answer and does not call the LLM.
+`FinancialKnowledgeContextProvider` returns an empty bounded context in those cases. `FinancialKnowledgeAgent` then returns a fixed insufficient-knowledge answer and does not call the LLM.
 
 ## 13. How data is saved into ChromaDB
 
@@ -816,12 +880,12 @@ Each document must provide:
 
 Each chunk stores:
 
-| Field | Value |
-|---|---|
-| Chroma ID | `chunk-` plus SHA-256 of source path, section, and content |
-| Document | Section heading and chunk text |
-| Embedding | 256 normalized floats |
-| Metadata | document ID/name/type, period, section, source path, chunk index |
+| Field     | Value                                                            |
+| --------- | ---------------------------------------------------------------- |
+| Chroma ID | `chunk-` plus SHA-256 of source path, section, and content       |
+| Document  | Section heading and chunk text                                   |
+| Embedding | 256 normalized floats                                            |
+| Metadata  | document ID/name/type, period, section, source path, chunk index |
 
 ### Duplicate and re-ingestion behavior
 
@@ -860,7 +924,7 @@ Current agents do not send MCP tool definitions to either provider. They do not 
 ```mermaid
 flowchart TD
     Failure[Operation fails] --> Type{Failure type}
-    Type -->|Invalid request| E400[400 validation Problem Details]
+    Type -->|Invalid request or prompt-risk rejection| E400[400 validation Problem Details]
     Type -->|MCP or Chroma dependency| E503[503 sanitized dependency response]
     Type -->|AI provider unavailable or invalid| O503[503 provider response]
     Type -->|AI provider or internal timeout| E504[504 timeout response]
@@ -869,19 +933,20 @@ flowchart TD
     Type -->|Unexpected| E500[500 sanitized response]
 ```
 
-| Situation | Current behavior |
-|---|---|
-| Missing/blank/oversized prompt | HTTP 400 validation Problem Details |
-| Unsupported request | HTTP 200 with an `unsupported` response and a scoped message |
-| Finance/Knowledge MCP unavailable | `McpDependencyException`, normally sanitized HTTP 503 |
-| Required MCP tool missing | `CapabilityMismatch`, mapped to sanitized HTTP 503 during a request/readiness unhealthy |
-| Invalid MCP arguments | Server/SDK rejection becomes controlled invalid-response dependency failure |
-| ChromaDB unavailable | `ChromaDependencyException` through `VectorSearchDependencyException`, HTTP 503 |
-| No relevant knowledge | Successful Knowledge result with a fixed insufficient-knowledge answer, not 503 |
-| AI provider unavailable or invalid | Sanitized provider HTTP 503 |
+| Situation                             | Current behavior                                                                                               |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Missing/blank/oversized prompt        | HTTP 400 validation Problem Details                                                                            |
+| Configured prompt-risk phrase         | `PromptInjectionRiskException`, sanitized HTTP 400 without calling the provider                                |
+| Unsupported request                   | HTTP 200 with an `unsupported` response and a scoped message                                                   |
+| Finance/Knowledge MCP unavailable     | `McpDependencyException`, normally sanitized HTTP 503                                                          |
+| Required MCP tool missing             | `CapabilityMismatch`, mapped to sanitized HTTP 503 during a request/readiness unhealthy                        |
+| Invalid MCP arguments                 | Server/SDK rejection becomes controlled invalid-response dependency failure                                    |
+| ChromaDB unavailable                  | `ChromaDependencyException` through `VectorSearchDependencyException`, HTTP 503                                |
+| No relevant knowledge                 | Successful Knowledge result with a fixed insufficient-knowledge answer, not 503                                |
+| AI provider unavailable or invalid    | Sanitized provider HTTP 503                                                                                    |
 | Invalid Sales Summary date-range JSON | C# prevents the Finance MCP call; the current `InvalidOperationException` mapping returns a sanitized HTTP 503 |
-| AI provider timeout | HTTP 504 |
-| Caller cancellation | Propagated; not converted to fallback or 503 |
+| AI provider timeout                   | HTTP 504                                                                                                       |
+| Caller cancellation                   | Propagated; not converted to fallback or 503                                                                   |
 
 MCP adapter operations use a linked configured timeout. On timeout or transport failure, the adapter disposes the connection and clears its tool cache so the next request reconnects.
 
@@ -893,33 +958,38 @@ Docker Compose reads root `.env` values and maps them to .NET options. Direct `d
 
 The local and container defaults are intentionally different. Local `appsettings.json` enables Finance MCP at `http://localhost:5081` and disables Knowledge MCP. Compose enables both MCP services at Docker DNS addresses and disables the Knowledge local fallback. Both modes use Ollama.
 
-| Setting | Purpose | Example | Used by | Required behavior |
-|---|---|---|---|---|
-| `AI:Provider` / `AI_PROVIDER` | Selected registered provider | `Ollama` | Composition root, response metadata | Required; currently `Ollama` only |
-| `AI:Ollama:Model` / `OLLAMA_MODEL` | Ollama model name | `llama3.2:3b` | Ollama adapter and dynamic chat metadata | Nonblank |
-| `AI:Ollama:BaseUrl` / `OLLAMA_BASE_URL` | Ollama endpoint | `http://host.docker.internal:11434` | Ollama HTTP client | Absolute HTTP URL |
-| `AI:Ollama:TimeoutSeconds` / `OLLAMA_TIMEOUT_SECONDS` | LLM operation timeout | `120` | Ollama adapter/client | 1 through 600 |
-| `AI:Ollama:Temperature` / `OLLAMA_TEMPERATURE` | Ollama sampling variability | `0` | Ollama request | 0 through 2 |
-| `AI:Ollama:ContextLength` / `OLLAMA_CONTEXT_LENGTH` | Ollama context size | `4096` | Ollama request | 1,024 through 32,768 |
-| `AI:Ollama:MaxOutputTokens` / `OLLAMA_MAX_OUTPUT_TOKENS` | Maximum completion size | `512` | Ollama request | 1 through 1,024 and below context length |
-| `Mcp:Finance:Enabled` | Enable required Finance MCP | `true` | Finance adapter/readiness | Finance readiness is unhealthy when false |
-| `Mcp:Finance:BaseUrl` / `FINANCE_MCP_BASE_URL` | Finance MCP service address | `http://finance-mcp:8080` | Finance keyed adapter | Absolute HTTP URL when enabled |
-| `Mcp:Finance:TimeoutSeconds` | Finance MCP timeout | `10` | Finance keyed adapter | Positive |
-| `Mcp:Finance:AllowedToolNames` | Finance security allow-list | Five committed tool names | MCP adapter | Unique, nonblank, non-empty when enabled |
-| `Mcp:KnowledgeFiles:Enabled` | Enable Knowledge MCP | `true` in Compose | Knowledge adapter/readiness | Controls remote client use |
-| `Mcp:KnowledgeFiles:BaseUrl` / `KNOWLEDGE_MCP_BASE_URL` | Knowledge MCP address | `http://knowledge-mcp:8080` | Knowledge keyed adapter | Absolute HTTP URL when enabled |
-| `Mcp:KnowledgeFiles:RootPath` | Local fallback/root setting | `/knowledge` | Local client and server mapping | Required for local fallback |
-| `Mcp:KnowledgeFiles:UseLocalFallback` | Permit local restricted-file fallback | `false` | `KnowledgeFileMcpAccess` | Allowed only in Development |
-| `Mcp:KnowledgeFiles:TimeoutSeconds` | Knowledge operation timeout | `10` | Remote/local knowledge clients | Positive |
-| `Chroma:BaseUrl` / `CHROMA_BASE_URL` | ChromaDB service address | `http://chromadb:8000` | Chroma clients/health | Absolute URL |
-| `Chroma:CollectionName` | Vector collection | `cfo-financial-knowledge` | Ingestion and search | Nonblank |
-| `Chroma:Tenant` / `Chroma:Database` | Chroma API v2 scope | `default_tenant`, `default_database` | Chroma client | Nonblank |
-| `Chroma:TimeoutSeconds` | Chroma HTTP timeout | `10` | Chroma clients | Positive |
-| `Rag:KnowledgeFilesRoot` | Markdown source directory | `/knowledge` in Compose | RAG ingestion | Nonblank |
-| `Rag:MaxChunkCharacters` | Maximum chunk target | `1200` | Ingestion | At least 256 |
-| `Rag:ChunkOverlapPercentage` / `RAG_CHUNK_OVERLAP_PERCENTAGE` | Percentage of each chunk repeated at the start of the next chunk | `15` | RAG ingestion | At least 0 and below 100; calculated overlap must be smaller than the chunk size |
-| `Rag:MaxKnowledgeContextCharacters` | Maximum LLM context built from retrieval | `4000` | Knowledge agent | At least 256 |
-| `Rag:MaximumRetrievalDistance` | Largest accepted Chroma distance | `1.25` | Vector-search adapter | Nonnegative |
+| Setting                                                                                        | Purpose                                                             | Example                              | Used by                                  | Required behavior                                                                |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------ | ---------------------------------------- | -------------------------------------------------------------------------------- |
+| `AI:Provider` / `AI_PROVIDER`                                                                  | Selected registered provider                                        | `Ollama`                             | Composition root, response metadata      | Required; currently `Ollama` only                                                |
+| `AI:Ollama:Model` / `OLLAMA_MODEL`                                                             | Ollama model name                                                   | `llama3.2:3b`                        | Ollama adapter and dynamic chat metadata | Nonblank                                                                         |
+| `AI:Ollama:BaseUrl` / `OLLAMA_BASE_URL`                                                        | Ollama endpoint                                                     | `http://host.docker.internal:11434`  | Ollama HTTP client                       | Absolute HTTP URL                                                                |
+| `AI:Ollama:TimeoutSeconds` / `OLLAMA_TIMEOUT_SECONDS`                                          | LLM operation timeout                                               | `120`                                | Ollama adapter/client                    | 1 through 600                                                                    |
+| `AI:Ollama:Temperature` / `OLLAMA_TEMPERATURE`                                                 | Ollama sampling variability                                         | `0`                                  | Ollama request                           | 0 through 2                                                                      |
+| `AI:Ollama:ContextLength` / `OLLAMA_CONTEXT_LENGTH`                                            | Ollama context size                                                 | `4096`                               | Ollama request                           | 1,024 through 32,768                                                             |
+| `AI:Ollama:MaxOutputTokens` / `OLLAMA_MAX_OUTPUT_TOKENS`                                       | Maximum completion size                                             | `512`                                | Ollama request                           | 1 through 1,024 and below context length                                         |
+| `AgentMiddleware:PromptInjectionCheckEnabled` / `AgentMiddleware__PromptInjectionCheckEnabled` | Enable deterministic prompt-risk checks                             | `true`                               | `AgentChatMiddleware`                    | When enabled, requires at least one phrase                                       |
+| `AgentMiddleware:SuspiciousPromptPhrases` / `AgentMiddleware__SuspiciousPromptPhrases__0`      | Phrases that cause a request to be blocked before the provider call | `ignore previous instructions`       | `AgentChatMiddleware`                    | Nonblank and unique, case-insensitively                                          |
+| `AgentSessions:MessageLimit` / `AgentSessions__MessageLimit`                                   | Most recent resolved turns retained per in-memory conversation      | `8`                                  | `InMemoryAgentSessionStore`              | 1 through 100                                                                    |
+| `AgentSessions:ExpirationMinutes` / `AgentSessions__ExpirationMinutes`                         | Sliding inactivity expiry for an in-memory conversation             | `30`                                 | `InMemoryAgentSessionStore`              | 1 through 1,440                                                                  |
+| `AgentSessions:MaximumSessions` / `AgentSessions__MaximumSessions`                             | Maximum conversation entries in one API process                     | `1000`                               | `InMemoryAgentSessionStore`              | 1 through 10,000                                                                 |
+| `Mcp:Finance:Enabled`                                                                          | Enable required Finance MCP                                         | `true`                               | Finance adapter/readiness                | Finance readiness is unhealthy when false                                        |
+| `Mcp:Finance:BaseUrl` / `FINANCE_MCP_BASE_URL`                                                 | Finance MCP service address                                         | `http://finance-mcp:8080`            | Finance keyed adapter                    | Absolute HTTP URL when enabled                                                   |
+| `Mcp:Finance:TimeoutSeconds`                                                                   | Finance MCP timeout                                                 | `10`                                 | Finance keyed adapter                    | Positive                                                                         |
+| `Mcp:Finance:AllowedToolNames`                                                                 | Finance security allow-list                                         | Five committed tool names            | MCP adapter                              | Unique, nonblank, non-empty when enabled                                         |
+| `Mcp:KnowledgeFiles:Enabled`                                                                   | Enable Knowledge MCP                                                | `true` in Compose                    | Knowledge adapter/readiness              | Controls remote client use                                                       |
+| `Mcp:KnowledgeFiles:BaseUrl` / `KNOWLEDGE_MCP_BASE_URL`                                        | Knowledge MCP address                                               | `http://knowledge-mcp:8080`          | Knowledge keyed adapter                  | Absolute HTTP URL when enabled                                                   |
+| `Mcp:KnowledgeFiles:RootPath`                                                                  | Local fallback/root setting                                         | `/knowledge`                         | Local client and server mapping          | Required for local fallback                                                      |
+| `Mcp:KnowledgeFiles:UseLocalFallback`                                                          | Permit local restricted-file fallback                               | `false`                              | `KnowledgeFileMcpAccess`                 | Allowed only in Development                                                      |
+| `Mcp:KnowledgeFiles:TimeoutSeconds`                                                            | Knowledge operation timeout                                         | `10`                                 | Remote/local knowledge clients           | Positive                                                                         |
+| `Chroma:BaseUrl` / `CHROMA_BASE_URL`                                                           | ChromaDB service address                                            | `http://chromadb:8000`               | Chroma clients/health                    | Absolute URL                                                                     |
+| `Chroma:CollectionName`                                                                        | Vector collection                                                   | `cfo-financial-knowledge`            | Ingestion and search                     | Nonblank                                                                         |
+| `Chroma:Tenant` / `Chroma:Database`                                                            | Chroma API v2 scope                                                 | `default_tenant`, `default_database` | Chroma client                            | Nonblank                                                                         |
+| `Chroma:TimeoutSeconds`                                                                        | Chroma HTTP timeout                                                 | `10`                                 | Chroma clients                           | Positive                                                                         |
+| `Rag:KnowledgeFilesRoot`                                                                       | Markdown source directory                                           | `/knowledge` in Compose              | RAG ingestion                            | Nonblank                                                                         |
+| `Rag:MaxChunkCharacters`                                                                       | Maximum chunk target                                                | `1200`                               | Ingestion                                | At least 256                                                                     |
+| `Rag:ChunkOverlapPercentage` / `RAG_CHUNK_OVERLAP_PERCENTAGE`                                  | Percentage of each chunk repeated at the start of the next chunk    | `15`                                 | RAG ingestion                            | At least 0 and below 100; calculated overlap must be smaller than the chunk size |
+| `Rag:MaxKnowledgeContextCharacters`                                                            | Maximum LLM context built from retrieval                            | `4000`                               | Knowledge agent                          | At least 256                                                                     |
+| `Rag:MaximumRetrievalDistance`                                                                 | Largest accepted Chroma distance                                    | `1.25`                               | Vector-search adapter                    | Nonnegative                                                                      |
 
 PostgreSQL credentials and `ConnectionStrings:FinanceDatabase` are supplied only to Finance MCP and `finance-db-init`. They are deliberately absent from API configuration.
 
@@ -987,14 +1057,14 @@ PostgreSQL, ChromaDB, and pgAdmin use named volumes. Knowledge files use a read-
 
 ## 18. Example scenarios
 
-| Example | Detected intent | Selected agent | External data | Tool or search | Composition |
-|---|---|---|---|---|---|
-| "Give me this week's sales summary." | Sales Summary | Sales Analysis | LLM date interpretation, then Finance MCP -> PostgreSQL | validated `startDate`/`endDate`, then `get_sales_summary` | Single result returned unchanged |
-| "Compare this week's sales with last week." | Sales Comparison | Sales Analysis | Finance MCP -> PostgreSQL | `compare_sales_periods` | Single result returned unchanged |
-| "Show me the top five products this month." | Top Products | Sales Analysis | Finance MCP -> PostgreSQL | `get_top_products` | Single result returned unchanged |
-| "Give me the sales forecast for the next five years." | Forecast | Forecasting | Finance MCP historical totals | `get_historical_sales`, then C# regression | Single result with forecasts and assumptions |
-| "What is the annual sales target and what assumptions were used?" | Knowledge | Financial Knowledge | ChromaDB | Top-3 vector search, distance threshold | Single grounded result with citations |
-| "Give me the sales forecast with assumptions and risks." | Mixed | Forecasting plus Financial Knowledge | Finance MCP and ChromaDB | `get_historical_sales` plus vector search | Composer joins two answers and structured results |
+| Example                                                           | Detected intent  | Selected agent                       | External data                                           | Tool or search                                            | Composition                                       |
+| ----------------------------------------------------------------- | ---------------- | ------------------------------------ | ------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------- |
+| "Give me this week's sales summary."                              | Sales Summary    | Sales Analysis                       | LLM date interpretation, then Finance MCP -> PostgreSQL | validated `startDate`/`endDate`, then `get_sales_summary` | Single result returned unchanged                  |
+| "Compare this week's sales with last week."                       | Sales Comparison | Sales Analysis                       | Finance MCP -> PostgreSQL                               | `compare_sales_periods`                                   | Single result returned unchanged                  |
+| "Show me the top five products this month."                       | Top Products     | Sales Analysis                       | Finance MCP -> PostgreSQL                               | `get_top_products`                                        | Single result returned unchanged                  |
+| "Give me the sales forecast for the next five years."             | Forecast         | Forecasting                          | Finance MCP historical totals                           | `get_historical_sales`, then C# regression                | Single result with forecasts and assumptions      |
+| "What is the annual sales target and what assumptions were used?" | Knowledge        | Financial Knowledge                  | ChromaDB                                                | Top-3 vector search, distance threshold                   | Single grounded result with citations             |
+| "Give me the sales forecast with assumptions and risks."          | Mixed            | Forecasting plus Financial Knowledge | Finance MCP and ChromaDB                                | `get_historical_sales` plus vector search                 | Composer joins two answers and structured results |
 
 The annual-target example does not call Finance MCP `get_budget_target` in the current chat flow. It reads indexed Markdown through ChromaDB.
 
@@ -1053,27 +1123,28 @@ These limitations are visible in the current code:
 - Internal MCP and PostgreSQL services are unauthenticated. Docker network isolation is the current protection.
 - Ollama is a local host dependency and must have the configured model installed.
 - Knowledge local fallback is Development-only and explicitly disabled in containers.
-- Chat history is not persisted. The conversation ID is returned but no conversation store exists.
+- Conversation context is in memory only. It is bounded, expires after inactivity, stores only resolved response metadata/date periods, and disappears on API restart; it is not persistent chat history.
+- Retrieved RAG text is prepared transiently by the scoped context provider. It is bounded and treated as untrusted, but a model can still misinterpret document content; source documents must remain reviewed and ingestion must remain controlled.
 - The ChromaDB and pgAdmin Compose images use `latest`, so exact image versions depend on pull time.
 
 ## 21. Glossary
 
-| Term | Simple definition |
-|---|---|
-| Agent | A class with a focused role in processing a user request |
-| Orchestrator | The coordinator that decides which specialist agents should run |
-| Specialist agent | A worker focused on Sales, Forecasting, or Financial Knowledge |
-| LLM | Large Language Model; software that classifies or writes natural-language text |
-| Prompt | Text instructions and context sent to an LLM |
-| MCP | Model Context Protocol; a standard for discovering and calling external tools |
-| MCP server | A service that exposes tools through MCP |
-| MCP tool | One named callable operation exposed by an MCP server |
-| Vector | A list of numbers used for mathematical comparison |
-| Embedding | A vector representation of text |
-| Semantic search | Finding text by content similarity rather than only exact keywords |
-| ChromaDB | The vector database used to store and search knowledge chunks |
-| RAG | Retrieval-Augmented Generation; retrieve source text before asking an LLM to answer |
-| Dependency injection | Supplying a class's dependencies through configuration/constructors instead of constructing them inside the class |
-| Adapter | Code that translates between the application's interface and an external technology |
-| Health check | A small probe reporting whether a process or required dependency is ready |
-| 503 response | HTTP Service Unavailable; a controlled response indicating a required service cannot currently complete the request |
+| Term                 | Simple definition                                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Agent                | A class with a focused role in processing a user request                                                            |
+| Orchestrator         | The coordinator that decides which specialist agents should run                                                     |
+| Specialist agent     | A worker focused on Sales, Forecasting, or Financial Knowledge                                                      |
+| LLM                  | Large Language Model; software that classifies or writes natural-language text                                      |
+| Prompt               | Text instructions and context sent to an LLM                                                                        |
+| MCP                  | Model Context Protocol; a standard for discovering and calling external tools                                       |
+| MCP server           | A service that exposes tools through MCP                                                                            |
+| MCP tool             | One named callable operation exposed by an MCP server                                                               |
+| Vector               | A list of numbers used for mathematical comparison                                                                  |
+| Embedding            | A vector representation of text                                                                                     |
+| Semantic search      | Finding text by content similarity rather than only exact keywords                                                  |
+| ChromaDB             | The vector database used to store and search knowledge chunks                                                       |
+| RAG                  | Retrieval-Augmented Generation; retrieve source text before asking an LLM to answer                                 |
+| Dependency injection | Supplying a class's dependencies through configuration/constructors instead of constructing them inside the class   |
+| Adapter              | Code that translates between the application's interface and an external technology                                 |
+| Health check         | A small probe reporting whether a process or required dependency is ready                                           |
+| 503 response         | HTTP Service Unavailable; a controlled response indicating a required service cannot currently complete the request |

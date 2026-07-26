@@ -17,14 +17,15 @@ namespace CfoAgent.Api.Tests.AI;
 public sealed class AiProviderRegistrationTests
 {
     [Fact]
-    public async Task DefaultConfiguration_SelectsAndRegistersTheOllamaChatClient()
+    public async Task DefaultConfiguration_RegistersTheOllamaClientThroughTheAgentMiddleware()
     {
         await using var factory = CreateFactory(static _ => { });
 
         var chatClients = factory.Services.GetServices<IChatClient>().ToArray();
 
         Assert.Single(chatClients);
-        Assert.IsType<OllamaChatClient>(chatClients[0]);
+        Assert.IsNotType<OllamaChatClient>(chatClients[0]);
+        Assert.NotNull(chatClients[0].GetService(typeof(ChatClientMetadata)));
     }
 
     [Fact]

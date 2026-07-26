@@ -66,6 +66,10 @@ OLLAMA_MODEL=llama3.2:3b
 
 For direct `dotnet run` development, .NET does not automatically load `.env`; use `appsettings.json`, user secrets, or normal `AI__...` environment variables instead.
 
+The API's LLM-call middleware is enabled by default. It records only safe operational metadata, blocks configured suspicious prompt phrases before an Ollama request, and redacts common sensitive values from text responses. For a direct `dotnet run` session, the matching environment variables are `AgentMiddleware__PromptInjectionCheckEnabled` and indexed `AgentMiddleware__SuspiciousPromptPhrases__0`, `__1`, and so on. The deployed defaults are in `src/CfoAgent.Api/appsettings.json`.
+
+The API also keeps short-lived conversation context in memory when the client sends the same `conversationId` on later chat requests. The defaults are `AgentSessions__MessageLimit=8`, `AgentSessions__ExpirationMinutes=30`, and `AgentSessions__MaximumSessions=1000`. This context contains only prior response types and date-period metadata for intent classification. It does not retain chat answers, prompts, source documents, credentials, or authorization state, and it is cleared when the API restarts.
+
 ## 4. Start everything with Docker
 
 From the repository root:

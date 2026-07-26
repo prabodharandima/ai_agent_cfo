@@ -1,6 +1,8 @@
 using System.Text.Json;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
+using System.Diagnostics;
+using CfoAgent.Api.Observability;
 
 namespace CfoAgent.Api.Mcp;
 
@@ -212,28 +214,39 @@ public sealed class McpToolAdapter : IMcpToolAdapter, IAsyncDisposable
         Func<CancellationToken, Task<T>> operation,
         CancellationToken cancellationToken)
     {
+        var operationName = string.Equals(dependencyName, "Finance MCP", StringComparison.Ordinal)
+            ? "finance-mcp.operation"
+            : "knowledge-mcp.operation";
+        var activity = AgentActivityTracing.Start(operationName);
+        var stopwatch = Stopwatch.StartNew();
         using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(timeout);
         try
         {
-            return await operation(timeoutSource.Token);
+            var result = await operation(timeoutSource.Token);
+            AgentActivityTracing.Complete(activity, operationName, stopwatch, "Success");
+            return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            AgentActivityTracing.Complete(activity, operationName, stopwatch, "Cancelled");
             throw;
         }
         catch (OperationCanceledException exception)
         {
             await ResetConnectionAsync();
+            AgentActivityTracing.Complete(activity, operationName, stopwatch, "Failure");
             throw new McpDependencyException(dependencyName, McpDependencyFailureKind.Timeout, exception);
         }
         catch (McpDependencyException)
         {
+            AgentActivityTracing.Complete(activity, operationName, stopwatch, "Failure");
             throw;
         }
         catch (Exception exception)
         {
             await ResetConnectionAsync();
+            AgentActivityTracing.Complete(activity, operationName, stopwatch, "Failure");
             throw new McpDependencyException(dependencyName, McpDependencyFailureKind.Unavailable, exception);
         }
     }

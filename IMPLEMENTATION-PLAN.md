@@ -24,6 +24,21 @@ The current Streamable HTTP clients use one minimal generic `McpToolAdapter` for
 
 `CfoAgent.Api` now has one explicit `CfoOrchestratorAgent`, three focused specialist workers, and a concrete deterministic `AgentResultComposer`. HTTP stays in `ChatEndpoints`; the orchestrator only classifies and routes bounded intents; specialists use `IChatClient`, typed MCP ports, or `IFinancialKnowledgeSearch` as appropriate. `McpToolAdapter` owns MCP SDK transport, and `ChromaFinancialKnowledgeSearch` owns the Chroma-backed vector-search adapter. The API has no PostgreSQL dependency, no Ollama-specific agent code, no MCP transport code in agents, and no second LLM composition pass. The completed refactor and final validation evidence are recorded in `docs/CFO-AGENT-API-REFACTOR-RESULTS.md`.
 
+## Microsoft Agent Framework integration - Complete
+
+`CfoAgent.Api` uses `Microsoft.Agents.AI` 1.13.0 with `Microsoft.Extensions.AI.Abstractions` 10.8.0 on `net10.0`. The completed integration keeps the existing architecture explicit and bounded:
+
+1. `AgentChatMiddleware` wraps the composition-root `IChatClient` for prompt-risk checks, safe logging, redaction, timing, and cancellation preservation.
+2. Structured model output is used only for intent classification and sales-summary date-range interpretation. C# validates and canonicalizes dates before the typed Finance MCP facade is called.
+3. `POST /api/chat/stream` is an optional SSE endpoint; `POST /api/chat` and its JSON contract remain unchanged.
+4. `InMemoryAgentSessionStore` keeps bounded response metadata and optional date periods per conversation ID. It never stores prompts, answers, raw RAG content, or MCP data.
+5. `FinancialKnowledgeContextProvider` prepares bounded transient RAG context, retains citations and duplicate control, and treats retrieved text as untrusted.
+6. `AgentActivityTracing` publishes safe OpenTelemetry-compatible activities and metrics without requiring an exporter.
+
+Normal automated tests use test-local `IChatClient` doubles. Live Ollama tests remain opt-in. The completed task records are under `tasks/maf_agent_integration/`.
+
+The following boundaries remain non-negotiable: deterministic C# and SQL finance values, canonical date validation, typed Finance MCP routing and allow-lists, Knowledge MCP filesystem restrictions, ChromaDB retrieval/citations, cancellation propagation, and sanitized dependency failures.
+
 ## Validation
 
 Use serialized solution commands:

@@ -77,18 +77,19 @@ public sealed class FinanceMcpOwnershipTests(FinancePostgreSqlFixture postgres)
             new FixedTimeProvider(currentDate));
 
         var before = await context.Sales.CountAsync();
+        var futureRowsBefore = await context.Sales.CountAsync(sale => sale.SaleDate > currentDate);
         await seeder.SeedAsync(CancellationToken.None);
         var afterFirstSeed = await context.Sales.CountAsync();
         await seeder.SeedAsync(CancellationToken.None);
         var afterSecondSeed = await context.Sales.CountAsync();
-        var futureRows = await context.Sales.CountAsync(sale => sale.SaleDate > currentDate);
+        var futureRowsAfter = await context.Sales.CountAsync(sale => sale.SaleDate > currentDate);
 
         var tools = new FinanceMcpTools(context);
         var summary = await tools.GetSalesSummaryAsync("2026-07-20", "2026-07-20", CancellationToken.None);
 
         Assert.True(afterFirstSeed >= before);
         Assert.Equal(afterFirstSeed, afterSecondSeed);
-        Assert.Equal(0, futureRows);
+        Assert.Equal(futureRowsBefore, futureRowsAfter);
         Assert.True(summary.IsSuccess);
         Assert.True(summary.Data!.NetRevenue > 0m);
         Assert.Empty(summary.Data.Warnings);

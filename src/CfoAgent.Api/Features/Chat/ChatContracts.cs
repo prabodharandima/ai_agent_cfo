@@ -7,6 +7,22 @@ public sealed record ChatRequest(string? ConversationId, string? Message);
 
 public sealed record ChatModel(string Provider, string Name);
 
+public sealed record ChatStreamProgress(string Stage);
+
+public sealed record ChatStreamContent(string Text);
+
+public sealed record ChatStreamCompletion(
+    string ConversationId,
+    IReadOnlyList<string> AgentNames,
+    string ResponseType,
+    IReadOnlyList<AgentSource> Sources,
+    IReadOnlyList<string> Assumptions,
+    IReadOnlyList<string> Warnings,
+    AgentDataPeriod? DataPeriod,
+    ChatModel Model);
+
+public sealed record ChatStreamError(int Status, string Title);
+
 public sealed record ChatResponse(
     string ConversationId,
     string Answer,

@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Runtime.CompilerServices;
+using System.Globalization;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 
 namespace CfoAgent.Api.Tests.AI;
@@ -77,9 +79,14 @@ internal sealed class TestChatClient : IChatClient
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (prompt.Contains("USER_REQUEST:", StringComparison.Ordinal))
+        if (prompt.Contains("STRUCTURED_SALES_PERIOD_OUTPUT", StringComparison.Ordinal))
         {
-            return Task.FromResult(Classify(prompt));
+            return Task.FromResult(ResolveSalesSummaryPeriod(prompt));
+        }
+
+        if (prompt.Contains("STRUCTURED_INTENT_OUTPUT", StringComparison.Ordinal))
+        {
+            return Task.FromResult(JsonSerializer.Serialize(new { intent = Classify(prompt) }));
         }
 
         if (prompt.Contains("SALES_SUMMARY_PERIOD_REQUEST:", StringComparison.Ordinal))
@@ -141,34 +148,14 @@ internal sealed class TestChatClient : IChatClient
         return "Unsupported";
     }
 
-    private static string ResolveSalesSummaryDateRange(string prompt)
+    private static string ResolveSalesSummaryPeriod(string prompt)
     {
-        const string currentDateMarker = "The current date is ";
-        var markerIndex = prompt.IndexOf(currentDateMarker, StringComparison.Ordinal);
-        var currentDate = DateOnly.ParseExact(
-            prompt.Substring(markerIndex + currentDateMarker.Length, 10),
-            "yyyy-MM-dd",
-            System.Globalization.CultureInfo.InvariantCulture);
-        var message = GetContentAfter(prompt, "SALES_SUMMARY_PERIOD_REQUEST:").ToUpperInvariant();
-
-        var (startDate, endDate) = message.Contains("LAST WEEK", StringComparison.Ordinal)
-            ? (StartOfWeek(currentDate).AddDays(-7), StartOfWeek(currentDate).AddDays(-1))
-            : message.Contains("SINCE YESTERDAY", StringComparison.Ordinal)
-                ? (currentDate.AddDays(-1), currentDate)
-                : message.Contains("YESTERDAY", StringComparison.Ordinal)
-                    ? (currentDate.AddDays(-1), currentDate.AddDays(-1))
-                    : message.Contains("TODAY", StringComparison.Ordinal)
-                        ? (currentDate, currentDate)
-                        : (StartOfWeek(currentDate), currentDate);
-
-        return JsonSerializer.Serialize(new
-        {
-            startDate = startDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture),
-            endDate = endDate.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)
-        });
+        const string marker = "The reference date is ";
+        var referenceDateText = GetContentAfter(prompt, marker).Split('.', 2)[0];
+        var referenceDate = DateOnly.ParseExact(referenceDateText, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+        var startDate = referenceDate.AddDays(-((int)referenceDate.DayOfWeek + 6) % 7);
+        return JsonSerializer.Serialize(new { startDate, endDate = referenceDate });
     }
-
-    private static DateOnly StartOfWeek(DateOnly date) => date.AddDays(-((int)date.DayOfWeek + 6) % 7);
 
     private static string GetContentAfter(string value, string marker)
     {

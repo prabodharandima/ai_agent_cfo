@@ -1,9 +1,11 @@
 using System.Diagnostics;
+using System.Text.Json;
 using CfoAgent.Api.AI;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents.Contracts;
 using CfoAgent.Api.Mcp;
 using CfoAgent.Api.Rag.Retrieval;
+using CfoAgent.Api.Observability;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -17,21 +19,47 @@ public sealed class CfoOrchestratorAgent(
     IChatClient chatClient,
     ILogger<CfoOrchestratorAgent>? logger = null)
 {
-    private const int MaximumClassificationResponseCharacters = 64;
+    private const int MaximumClassificationResponseCharacters = 256;
+    private static readonly JsonSerializerOptions StructuredOutputJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly ILogger<CfoOrchestratorAgent> _logger = logger ?? NullLogger<CfoOrchestratorAgent>.Instance;
 
-    public async Task<CfoIntent> ClassifyAsync(string message, CancellationToken cancellationToken = default)
+    public async Task<CfoIntent> ClassifyAsync(AgentRequest request, CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.Message);
 
-        var response = await chatClient.GetResponseAsync(
-            [new ChatMessage(ChatRole.User, AgentPromptTemplates.ForClassification(message))],
-            new ChatOptions { Instructions = AgentDefinitions.CfoOrchestrator.SystemInstructions },
-            cancellationToken);
+        var activity = AgentActivityTracing.Start("intent.classification", agent: AgentDefinitions.CfoOrchestrator.Name);
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var response = await chatClient.GetResponseAsync(
+                [new ChatMessage(ChatRole.User, AgentPromptTemplates.ForClassification(request.Message, request.SessionContext))],
+                new ChatOptions
+                {
+                    Instructions = AgentDefinitions.CfoOrchestrator.SystemInstructions,
+                    ResponseFormat = ChatResponseFormat.ForJsonSchema<IntentClassificationOutput>(
+                        StructuredOutputJsonOptions,
+                        "cfo_intent_classification",
+                        "A validated CFO request intent.")
+                },
+                cancellationToken);
 
-        return TryParseIntent(response.Text, out var intent) && intent != CfoIntent.Unsupported
-            ? intent
-            : ClassifyDeterministically(message);
+            var intent = TryParseStructuredIntent(response.Text, out var parsedIntent) && parsedIntent != CfoIntent.Unsupported
+                ? parsedIntent
+                : ClassifyDeterministically(request.Message);
+            AgentActivityTracing.Complete(activity, "intent.classification", stopwatch, "Success", AgentDefinitions.CfoOrchestrator.Name);
+            return intent;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            AgentActivityTracing.Complete(activity, "intent.classification", stopwatch, "Cancelled", AgentDefinitions.CfoOrchestrator.Name);
+            throw;
+        }
+        catch
+        {
+            AgentActivityTracing.Complete(activity, "intent.classification", stopwatch, "Failure", AgentDefinitions.CfoOrchestrator.Name);
+            throw;
+        }
     }
 
     public async Task<AgentResult> HandleAsync(AgentRequest request, CancellationToken cancellationToken = default)
@@ -39,25 +67,46 @@ public sealed class CfoOrchestratorAgent(
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Message);
 
+        var intent = await ClassifyAsync(request, cancellationToken);
+        return await HandleClassifiedAsync(request, intent, cancellationToken);
+    }
+
+    public async Task<AgentResult> HandleClassifiedAsync(
+        AgentRequest request,
+        CfoIntent intent,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.Message);
+
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var intent = await ClassifyAsync(request.Message, cancellationToken);
             _logger.LogInformation("CFO request routed. Intent: {Intent}", intent);
             var specialistResults = intent switch
             {
-                CfoIntent.SalesSummary => [await salesAnalysisAgent.GetWeeklySummaryAsync(request, cancellationToken)],
-                CfoIntent.SalesComparison => [await salesAnalysisAgent.GetWeekOverWeekComparisonAsync(request, cancellationToken)],
-                CfoIntent.TopProducts => [await salesAnalysisAgent.GetCurrentMonthTopProductsAsync(request, cancellationToken)],
-                CfoIntent.Forecast => [await forecastingAgent.GetForecastAsync(request, cancellationToken)],
-                CfoIntent.Knowledge => [await financialKnowledgeAgent.AnswerAsync(request, cancellationToken: cancellationToken)],
+                CfoIntent.SalesSummary => [await ExecuteSpecialistAsync(AgentDefinitions.SalesAnalysis.Name, () => salesAnalysisAgent.GetWeeklySummaryAsync(request, cancellationToken), cancellationToken)],
+                CfoIntent.SalesComparison => [await ExecuteSpecialistAsync(AgentDefinitions.SalesAnalysis.Name, () => salesAnalysisAgent.GetWeekOverWeekComparisonAsync(request, cancellationToken), cancellationToken)],
+                CfoIntent.TopProducts => [await ExecuteSpecialistAsync(AgentDefinitions.SalesAnalysis.Name, () => salesAnalysisAgent.GetCurrentMonthTopProductsAsync(request, cancellationToken), cancellationToken)],
+                CfoIntent.Forecast => [await ExecuteSpecialistAsync(AgentDefinitions.Forecasting.Name, () => forecastingAgent.GetForecastAsync(request, cancellationToken), cancellationToken)],
+                CfoIntent.Knowledge => [await ExecuteSpecialistAsync(AgentDefinitions.FinancialKnowledge.Name, () => financialKnowledgeAgent.AnswerAsync(request, cancellationToken: cancellationToken), cancellationToken)],
                 CfoIntent.Mixed => await GetMixedResultsAsync(request, cancellationToken),
                 _ => Array.Empty<AgentResult>()
             };
 
-            var result = specialistResults.Length == 0
-                ? UnsupportedResult()
-                : resultComposer.Compose(specialistResults);
+            var compositionActivity = AgentActivityTracing.Start("result.composition", AgentDefinitions.CfoOrchestrator.Name);
+            var compositionStopwatch = Stopwatch.StartNew();
+            AgentResult result;
+            try
+            {
+                result = specialistResults.Length == 0 ? UnsupportedResult() : resultComposer.Compose(specialistResults);
+                AgentActivityTracing.Complete(compositionActivity, "result.composition", compositionStopwatch, "Success", AgentDefinitions.CfoOrchestrator.Name);
+            }
+            catch
+            {
+                AgentActivityTracing.Complete(compositionActivity, "result.composition", compositionStopwatch, "Failure", AgentDefinitions.CfoOrchestrator.Name);
+                throw;
+            }
 
             _logger.LogInformation(
                 "CFO request completed. ResponseType: {ResponseType}; AgentCount: {AgentCount}; DurationMilliseconds: {DurationMilliseconds}",
@@ -93,8 +142,8 @@ public sealed class CfoOrchestratorAgent(
 
     private async Task<AgentResult[]> GetMixedResultsAsync(AgentRequest request, CancellationToken cancellationToken)
     {
-        var forecastTask = forecastingAgent.GetForecastAsync(request, cancellationToken);
-        var knowledgeTask = financialKnowledgeAgent.AnswerAsync(request, cancellationToken: cancellationToken);
+        var forecastTask = ExecuteSpecialistAsync(AgentDefinitions.Forecasting.Name, () => forecastingAgent.GetForecastAsync(request, cancellationToken), cancellationToken);
+        var knowledgeTask = ExecuteSpecialistAsync(AgentDefinitions.FinancialKnowledge.Name, () => financialKnowledgeAgent.AnswerAsync(request, cancellationToken: cancellationToken), cancellationToken);
         var results = await Task.WhenAll(forecastTask, knowledgeTask);
 
         return results;
@@ -110,7 +159,7 @@ public sealed class CfoOrchestratorAgent(
         Array.Empty<string>(),
             null);
 
-    private static bool TryParseIntent(string? response, out CfoIntent intent)
+    private static bool TryParseStructuredIntent(string? response, out CfoIntent intent)
     {
         intent = CfoIntent.Unsupported;
         if (string.IsNullOrWhiteSpace(response) || response.Length > MaximumClassificationResponseCharacters)
@@ -118,7 +167,48 @@ public sealed class CfoOrchestratorAgent(
             return false;
         }
 
-        var candidate = response.Trim();
+        try
+        {
+            var output = JsonSerializer.Deserialize<IntentClassificationOutput>(response, StructuredOutputJsonOptions);
+            return output is not null && TryParseIntent(output.Intent, out intent);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task<AgentResult> ExecuteSpecialistAsync(string agentName, Func<Task<AgentResult>> operation, CancellationToken cancellationToken)
+    {
+        var activity = AgentActivityTracing.Start("specialist.execution", agentName);
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var result = await operation();
+            AgentActivityTracing.Complete(activity, "specialist.execution", stopwatch, "Success", agentName);
+            return result;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            AgentActivityTracing.Complete(activity, "specialist.execution", stopwatch, "Cancelled", agentName);
+            throw;
+        }
+        catch
+        {
+            AgentActivityTracing.Complete(activity, "specialist.execution", stopwatch, "Failure", agentName);
+            throw;
+        }
+    }
+
+    private static bool TryParseIntent(string? candidate, out CfoIntent intent)
+    {
+        intent = CfoIntent.Unsupported;
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return false;
+        }
+
+        candidate = candidate.Trim();
         foreach (var allowedIntent in Enum.GetValues<CfoIntent>())
         {
             if (string.Equals(candidate, allowedIntent.ToString(), StringComparison.OrdinalIgnoreCase))

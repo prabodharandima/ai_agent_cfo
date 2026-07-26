@@ -104,7 +104,7 @@ public sealed class OllamaLiveIntegrationTests
             chromaClient,
             new DeterministicTokenHashEmbeddingGenerator(),
             Options.Create(settings.Rag));
-        var agent = new FinancialKnowledgeAgent(retrievalService, chatClient, Options.Create(settings.Rag));
+        var agent = new FinancialKnowledgeAgent(new FinancialKnowledgeContextProvider(retrievalService, Options.Create(settings.Rag)), chatClient);
 
         var result = await agent.AnswerAsync(
             new AgentRequest("What is the annual sales target and what assumptions were used?"),

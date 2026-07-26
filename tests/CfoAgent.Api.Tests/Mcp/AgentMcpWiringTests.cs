@@ -202,9 +202,8 @@ public sealed class AgentMcpWiringTests
         IFinancialKnowledgeSearch retrieval = new ChromaFinancialKnowledgeSearch(chroma, embeddings, ragOptions);
 
         return new FinancialKnowledgeAgent(
-            retrieval,
-            client,
-            ragOptions);
+            new FinancialKnowledgeContextProvider(retrieval, ragOptions),
+            client);
     }
 
     private static SalesSummary CreateSummary(decimal revenue) => new(

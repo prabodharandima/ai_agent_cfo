@@ -1,4 +1,5 @@
 using System.Net;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using CfoAgent.Api.AI;
@@ -213,6 +214,24 @@ public sealed class OllamaChatClientTests
         Assert.DoesNotContain("localhost", entry.FormattedMessage, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task GetStreamingResponseAsync_UsesTheUnderlyingStreamingTransport()
+    {
+        using var transport = new StreamingTransport("Verified ", "streamed response.");
+        using var client = CreateStreamingClient(transport);
+        var updates = new List<ChatResponseUpdate>();
+
+        await foreach (var update in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "Use only verified values.")]))
+        {
+            updates.Add(update);
+        }
+
+        Assert.Equal(1, transport.StreamCallCount);
+        Assert.Equal(0, transport.ResponseCallCount);
+        Assert.Equal("Verified streamed response.", string.Concat(updates.Select(update => update.Text)));
+    }
+
     private static ClientFixture CreateClient(
         HttpMessageHandler handler,
         int timeoutSeconds = 5,
@@ -239,6 +258,21 @@ public sealed class OllamaChatClientTests
             options,
             new AiProviderDescriptor("Ollama", model),
             logger));
+    }
+
+    private static OllamaChatClient CreateStreamingClient(IChatClient transport)
+    {
+        var options = new OllamaOptions
+        {
+            Model = "configured-model",
+            BaseUrl = "http://localhost:11434",
+            TimeoutSeconds = 5,
+            Temperature = 0.25,
+            ContextLength = 4096,
+            MaxOutputTokens = 256
+        };
+
+        return new OllamaChatClient(transport, options, new AiProviderDescriptor("Ollama", options.Model));
     }
 
     private static string CreateChatResponse(string content, string model = "configured-model") => JsonSerializer.Serialize(new
@@ -324,6 +358,48 @@ public sealed class OllamaChatClientTests
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             return await responseFactory(request, cancellationToken);
+        }
+    }
+
+    private sealed class StreamingTransport(params string[] updates) : IChatClient
+    {
+        public ChatClientMetadata Metadata { get; } = new("Test", new Uri("https://test.local"), "test-model");
+
+        public int ResponseCallCount { get; private set; }
+
+        public int StreamCallCount { get; private set; }
+
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            CancellationToken cancellationToken = default)
+        {
+            ResponseCallCount++;
+            throw new InvalidOperationException("The completed-response transport should not be called for streaming.");
+        }
+
+        public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages,
+            ChatOptions? options = null,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            StreamCallCount++;
+            foreach (var update in updates)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return new ChatResponseUpdate(ChatRole.Assistant, update)
+                {
+                    ModelId = Metadata.DefaultModelId
+                };
+                await Task.Yield();
+            }
+        }
+
+        public object? GetService(Type serviceType, object? serviceKey = null) =>
+            serviceType == typeof(ChatClientMetadata) ? Metadata : null;
+
+        public void Dispose()
+        {
         }
     }
 

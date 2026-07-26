@@ -26,6 +26,7 @@ public sealed class ContractFreezeTests
         Assert.Equal(FinanceToolNames, FinanceMcpToolCatalog.Names);
         Assert.Equal(FinanceToolNames.OrderBy(name => name, StringComparer.Ordinal), GetToolMethods(typeof(FinanceMcpTools)).Select(tool => tool.Name));
 
+        AssertMethod(typeof(IFinanceMcpClient), "GetSalesSummaryAsync", typeof(SalesSummary), [typeof(SalesPeriod), typeof(CancellationToken)]);
         AssertMethod(typeof(IFinanceMcpClient), "GetCurrentWeekSummaryAsync", typeof(SalesSummary), [typeof(CancellationToken)]);
         AssertMethod(typeof(IFinanceMcpClient), "GetWeekOverWeekComparisonAsync", typeof(WeeklySalesComparison), [typeof(CancellationToken)]);
         AssertMethod(typeof(IFinanceMcpClient), "GetCurrentMonthTopProductsAsync", typeof(TopProductsResult), [typeof(CancellationToken)]);

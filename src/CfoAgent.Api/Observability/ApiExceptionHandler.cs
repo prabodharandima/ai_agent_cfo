@@ -15,6 +15,7 @@ public sealed class ApiExceptionHandler(
     {
         var (statusCode, title) = exception switch
         {
+            PromptInjectionRiskException => (StatusCodes.Status400BadRequest, "The request contains unsupported instruction content."),
             AiProviderException { FailureKind: AiProviderFailureKind.Timeout } => (StatusCodes.Status504GatewayTimeout, "The selected model provider timed out."),
             AiProviderException { FailureKind: AiProviderFailureKind.Unavailable } => (StatusCodes.Status503ServiceUnavailable, "The selected model provider is temporarily unavailable."),
             AiProviderException => (StatusCodes.Status503ServiceUnavailable, "The selected model provider returned an unusable response."),
@@ -26,7 +27,11 @@ public sealed class ApiExceptionHandler(
             _ => (StatusCodes.Status500InternalServerError, "An unexpected server error occurred.")
         };
 
-        if (exception is AiProviderException providerException)
+        if (exception is PromptInjectionRiskException)
+        {
+            logger.LogWarning("Agent chat request was blocked. CorrelationId: {CorrelationId}; StatusCode: {StatusCode}", httpContext.TraceIdentifier, statusCode);
+        }
+        else if (exception is AiProviderException providerException)
         {
             logger.LogWarning(
                 "AI provider operation failed. Provider: {Provider}; Model: {Model}; Operation: {Operation}; Outcome: {Outcome}; FailureCategory: {FailureCategory}; StatusCode: {StatusCode}",

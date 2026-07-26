@@ -31,7 +31,7 @@ public sealed class OllamaAgentGuardrailTests
         var financeClient = new FinanceFake();
         var salesAgent = new SalesAnalysisAgent(fakeClient, financeClient);
         var forecastAgent = new ForecastingAgent(new SalesForecastingService(), fakeClient, financeClient);
-        var knowledgeAgent = new FinancialKnowledgeAgent(CreateKnowledgeSearch(new KnowledgeHandler()), fakeClient, ragOptions);
+        var knowledgeAgent = new FinancialKnowledgeAgent(new FinancialKnowledgeContextProvider(CreateKnowledgeSearch(new KnowledgeHandler()), ragOptions), fakeClient);
         var orchestrator = new CfoOrchestratorAgent(salesAgent, forecastAgent, knowledgeAgent, new AgentResultComposer(), fakeClient);
         var scenarios = new[]
         {
@@ -70,7 +70,7 @@ public sealed class OllamaAgentGuardrailTests
         var orchestrator = new CfoOrchestratorAgent(
             new SalesAnalysisAgent(fakeClient, financeClient),
             new ForecastingAgent(new SalesForecastingService(), fakeClient, financeClient),
-            new FinancialKnowledgeAgent(CreateKnowledgeSearch(new KnowledgeHandler()), fakeClient, ragOptions),
+            new FinancialKnowledgeAgent(new FinancialKnowledgeContextProvider(CreateKnowledgeSearch(new KnowledgeHandler()), ragOptions), fakeClient),
             new AgentResultComposer(),
             fakeClient);
 
@@ -103,7 +103,7 @@ public sealed class OllamaAgentGuardrailTests
             new AgentResultComposer(),
             fakeClient);
 
-        var intent = await orchestrator.ClassifyAsync(prompt);
+        var intent = await orchestrator.ClassifyAsync(new AgentRequest(prompt));
 
         Assert.Equal(expected, intent);
     }
@@ -152,9 +152,10 @@ public sealed class OllamaAgentGuardrailTests
     {
         using var fakeClient = new OllamaStyleFakeChatClient();
         var agent = new FinancialKnowledgeAgent(
-            CreateKnowledgeSearch(new MissingCollectionHandler()),
-            fakeClient,
-            CreateRagOptions(maximumContextCharacters: 256));
+            new FinancialKnowledgeContextProvider(
+                CreateKnowledgeSearch(new MissingCollectionHandler()),
+                CreateRagOptions(maximumContextCharacters: 256)),
+            fakeClient);
 
         var result = await agent.AnswerAsync(new AgentRequest("What is the annual target?"));
 
