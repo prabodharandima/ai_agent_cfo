@@ -22,6 +22,7 @@ public sealed class SalesAnalysisAgent(
     public async Task<AgentResult> GetWeeklySummaryAsync(AgentRequest request, CancellationToken cancellationToken)
     {
         ValidateRequest(request);
+        cancellationToken.ThrowIfCancellationRequested();
 
         try
         {
@@ -150,27 +151,6 @@ public sealed class SalesAnalysisAgent(
         return response.Text;
     }
 
-    private static SalesPeriod ValidateDateRange(SalesSummaryDateRange range, DateOnly currentDate)
-    {
-        if (!DateOnly.TryParseExact(range.StartDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var startDate) ||
-            !DateOnly.TryParseExact(range.EndDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var endDate))
-        {
-            throw new InvalidOperationException("The model returned dates in an invalid format.");
-        }
-
-        if (endDate < startDate)
-        {
-            throw new InvalidOperationException("The model returned a sales-summary range with an end date before its start date.");
-        }
-
-        if (endDate > currentDate)
-        {
-            throw new InvalidOperationException("The model returned a sales-summary range in the future.");
-        }
-
-        return new SalesPeriod(startDate, endDate);
-    }
-
     private async Task<SalesPeriod> ResolveSalesSummaryPeriodAsync(
         string message,
         DateOnly currentDate,
@@ -182,7 +162,7 @@ public sealed class SalesAnalysisAgent(
             {
                 Instructions = AgentDefinitions.SalesAnalysis.SystemInstructions,
                 ResponseFormat = ChatResponseFormat.ForJsonSchema<SalesSummaryDateRangeOutput>(
-                    StructuredOutputJsonOptions,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web),
                     "sales_summary_date_range",
                     "An inclusive, validated sales-summary date range.")
             },
@@ -241,6 +221,4 @@ public sealed class SalesAnalysisAgent(
             throw new ArgumentException("Agent requests require a message.", nameof(request));
         }
     }
-
-    private sealed record SalesSummaryDateRange(string? StartDate, string? EndDate);
 }

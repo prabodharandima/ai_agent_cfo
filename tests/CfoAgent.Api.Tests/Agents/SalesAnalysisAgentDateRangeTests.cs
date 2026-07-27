@@ -1,3 +1,4 @@
+using CfoAgent.Api.AI;
 using CfoAgent.Api.Agents;
 using CfoAgent.Api.Agents.Contracts;
 using CfoAgent.Api.Features.Forecasting;
@@ -55,9 +56,10 @@ public sealed class SalesAnalysisAgentDateRangeTests
             financeClient,
             new FixedTimeProvider(new DateOnly(2026, 7, 15)));
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        var exception = await Assert.ThrowsAsync<AiProviderException>(() =>
             agent.GetWeeklySummaryAsync(new AgentRequest("Give me the sales summary."), CancellationToken.None));
 
+        Assert.Equal(AiProviderFailureKind.InvalidResponse, exception.FailureKind);
         Assert.Null(financeClient.RequestedPeriod);
     }
 

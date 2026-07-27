@@ -35,10 +35,10 @@ public sealed class AgentContractsTests
             CancellationToken.None);
 
         Assert.Equal("Verified presentation.", result.Answer);
-        Assert.Equal(2, client.Options.Count);
+        Assert.Single(client.Options);
         Assert.All(client.Options, options => Assert.Equal(AgentDefinitions.SalesAnalysis.SystemInstructions, options.Instructions));
         Assert.All(client.Options, options => Assert.True(options.Tools is null or { Count: 0 }));
-        Assert.Contains(client.Prompts, prompt => prompt.Contains("SALES_SUMMARY_PERIOD_REQUEST:", StringComparison.Ordinal));
+        Assert.DoesNotContain(client.Prompts, prompt => prompt.Contains("SALES_SUMMARY_PERIOD_REQUEST:", StringComparison.Ordinal));
         Assert.Contains(client.Prompts, prompt => prompt.Contains("VERIFIED_DATA:", StringComparison.Ordinal));
     }
 

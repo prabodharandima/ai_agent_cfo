@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Mcp;
+using CfoAgent.Api.Tests.Caching;
 using CfoAgent.Api.Tests.Finance;
 using CfoAgent.FinanceMcpServer.Configuration;
 using CfoAgent.KnowledgeFileMcpServer;
@@ -8,6 +9,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using FinanceMcpProgram = CfoAgent.FinanceMcpServer.Program;
 using KnowledgeMcpProgram = CfoAgent.KnowledgeFileMcpServer.Program;
 
@@ -185,7 +187,9 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
             timeoutSeconds,
             ["get_sales_summary", "compare_sales_periods", "get_top_products", "get_historical_sales", "get_budget_target"],
             new SingleHttpClientFactory(httpClient),
-            NullLogger<McpToolAdapter>.Instance);
+            NullLogger<McpToolAdapter>.Instance,
+            new InMemoryApplicationCache(),
+            Options.Create(new CacheOptions()));
 
     private static FinanceMcpClient CreateFinanceClient(IMcpToolAdapter adapter) => new(
         adapter,
@@ -200,7 +204,9 @@ public sealed class ApiHttpMcpClientTests(FinancePostgreSqlFixture postgres)
         5,
         ["list_knowledge_files", "read_knowledge_file"],
         new SingleHttpClientFactory(httpClient),
-        NullLogger<McpToolAdapter>.Instance);
+        NullLogger<McpToolAdapter>.Instance,
+        new InMemoryApplicationCache(),
+        Options.Create(new CacheOptions()));
 
     private static KnowledgeFileMcpOptions CreateKnowledgeOptions(bool enabled = false) => new()
     {

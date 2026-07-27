@@ -39,6 +39,10 @@ Normal automated tests use test-local `IChatClient` doubles. Live Ollama tests r
 
 The following boundaries remain non-negotiable: deterministic C# and SQL finance values, canonical date validation, typed Finance MCP routing and allow-lists, Knowledge MCP filesystem restrictions, ChromaDB retrieval/citations, cancellation propagation, and sanitized dependency failures.
 
+## Caching integration - Complete
+
+Task 1 adds the provider-neutral `IApplicationCache` port, a HybridCache implementation, optional internal Redis backing, and a decorator that caches every typed Finance MCP read with deterministic safe keys and operation-specific TTLs. Task 2 adds cached ChromaDB retrieval results. Task 3 adds cached individual deterministic embedding vectors. Task 4 extends `McpToolAdapter` with a shared cache of approved serializable tool-name snapshots while retaining its connection-local discovery set and MCP SDK client. Discovery keys fingerprint dependency identity, endpoint, allow-list, and schema version. Failures invalidate the shared snapshot and force direct `tools/list` refresh; cache failure also calls `tools/list`. Task 5 caches only successful schema-validated non-`Unsupported` LLM intent classifications. Classification keys fingerprint normalized user text, provider/model, prompt and allowed-intent versions, safe session metadata, and prompt-risk policy; malformed output, deterministic fallbacks, prompt-risk blocks, provider failures, timeouts, cancellation, and final chat responses are never cached. Local configuration defaults to memory-only caching; Compose enables Redis. The caching task pack is complete.
+
 ## Validation
 
 Use serialized solution commands:

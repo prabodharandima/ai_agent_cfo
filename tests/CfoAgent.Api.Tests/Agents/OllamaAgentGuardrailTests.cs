@@ -50,10 +50,10 @@ public sealed class OllamaAgentGuardrailTests
             Assert.Equal(scenario.Type, result.ResponseType);
             Assert.NotNull(result.StructuredData);
             Assert.NotEmpty(result.Answer);
-            Assert.Equal(callCountBefore + (scenario.Type == AgentResponseType.SalesSummary ? 3 : 2), fakeClient.Prompts.Count);
+            Assert.Equal(callCountBefore + 2, fakeClient.Prompts.Count);
         }
 
-        Assert.Equal(11, fakeClient.Prompts.Count);
+        Assert.Equal(10, fakeClient.Prompts.Count);
         Assert.DoesNotContain(fakeClient.Prompts, prompt => prompt.Contains("ORCHESTRATE", StringComparison.Ordinal));
         Assert.All(fakeClient.RequestOptions, options => Assert.True(options?.Tools is null or { Count: 0 }));
         Assert.Equal(256, fakeClient.GetPayloadAfterMarker("RETRIEVED_CONTEXT:").Length);

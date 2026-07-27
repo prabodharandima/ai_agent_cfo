@@ -2,6 +2,7 @@ using CfoAgent.Api.AI;
 using CfoAgent.Api.AI.Ollama;
 using CfoAgent.Api.Agents.Configuration;
 using CfoAgent.Api.Agents;
+using CfoAgent.Api.Caching;
 using CfoAgent.Api.Configuration;
 using CfoAgent.Api.Features.Forecasting;
 using CfoAgent.Api.Features.Chat;
@@ -51,6 +52,7 @@ builder.Services.AddOptions<RagOptions>()
         "Rag:ChunkOverlapPercentage must produce an overlap smaller than Rag:MaxChunkCharacters.")
     .Validate(options => options.MaxKnowledgeContextCharacters >= 256, "Rag:MaxKnowledgeContextCharacters must be at least 256.")
     .Validate(options => options.MaximumRetrievalDistance >= 0, "Rag:MaximumRetrievalDistance must not be negative.")
+    .Validate(options => !string.IsNullOrWhiteSpace(options.IndexVersion), "Rag:IndexVersion is required.")
     .ValidateOnStart();
 
 builder.Services.AddOptions<AiOptions>()
@@ -82,6 +84,25 @@ builder.Services.AddOptions<AgentSessionOptions>()
     .Validate(options => options.MessageLimit is > 0 and <= 100, "AgentSessions:MessageLimit must be between 1 and 100.")
     .Validate(options => options.ExpirationMinutes is > 0 and <= 1_440, "AgentSessions:ExpirationMinutes must be between 1 and 1440.")
     .Validate(options => options.MaximumSessions is > 0 and <= 10_000, "AgentSessions:MaximumSessions must be between 1 and 10000.")
+    .ValidateOnStart();
+
+builder.Services.AddOptions<CacheOptions>()
+    .BindConfiguration(CacheOptions.SectionName)
+    .Validate(options => !options.Enabled
+        || (options.Finance.AllTtlSeconds().All(seconds => seconds > 0)
+            && options.Rag.RetrievalTtlSeconds > 0
+            && options.Embeddings.TtlSeconds > 0
+            && !string.IsNullOrWhiteSpace(options.Embeddings.Version)
+            && options.McpDiscovery.TtlSeconds > 0
+            && !string.IsNullOrWhiteSpace(options.McpDiscovery.SchemaVersion)
+            && options.Classification.TtlSeconds > 0
+            && !string.IsNullOrWhiteSpace(options.Classification.PromptVersion)
+            && !string.IsNullOrWhiteSpace(options.Classification.AllowedIntentSetVersion)),
+        "All enabled cache TTL values must be greater than zero.")
+    .Validate(options => !options.Enabled
+        || !options.UseDistributedCache
+        || !string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("Redis")),
+        "ConnectionStrings:Redis is required when distributed caching is enabled.")
     .ValidateOnStart();
 
 builder.Services.AddOptions<McpOptions>()
@@ -125,6 +146,20 @@ builder.Services.AddSingleton<AiProviderDescriptor>(serviceProvider =>
 });
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<AgentChatMiddleware>();
+var cacheOptions = builder.Configuration.GetSection(CacheOptions.SectionName).Get<CacheOptions>() ?? new CacheOptions();
+if (cacheOptions.Enabled && cacheOptions.UseDistributedCache)
+{
+    var redisConnectionString = builder.Configuration.GetConnectionString("Redis")
+        ?? throw new InvalidOperationException("ConnectionStrings:Redis is required when distributed caching is enabled.");
+    builder.Services.AddStackExchangeRedisCache(options =>
+    {
+        options.Configuration = redisConnectionString;
+        options.InstanceName = "cfo-agent:";
+    });
+}
+
+builder.Services.AddHybridCache();
+builder.Services.AddSingleton<IApplicationCache, HybridApplicationCache>();
 builder.Services.AddHttpClient(OllamaOptions.HttpClientName, (serviceProvider, client) =>
 {
     var ollama = serviceProvider.GetRequiredService<OllamaOptions>();
@@ -147,9 +182,24 @@ builder.Services.AddSingleton<IChatClient>(serviceProvider =>
         _ => throw new InvalidOperationException("The configured AI provider is not registered.")
     };
 });
-builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>, DeterministicTokenHashEmbeddingGenerator>();
+builder.Services.AddSingleton<DeterministicTokenHashEmbeddingGenerator>();
+builder.Services.AddSingleton<IEmbeddingGenerator<string, Embedding<float>>>(serviceProvider =>
+{
+    var inner = serviceProvider.GetRequiredService<DeterministicTokenHashEmbeddingGenerator>();
+    return new CachedEmbeddingGenerator(
+        inner,
+        serviceProvider.GetRequiredService<IApplicationCache>(),
+        serviceProvider.GetRequiredService<IOptions<CacheOptions>>(),
+        inner.GetType().FullName ?? inner.GetType().Name,
+        inner.Dimension);
+});
 builder.Services.AddScoped<RagDocumentIngestionService>();
-builder.Services.AddScoped<IFinancialKnowledgeSearch, ChromaFinancialKnowledgeSearch>();
+builder.Services.AddScoped<ChromaFinancialKnowledgeSearch>();
+builder.Services.AddScoped<IFinancialKnowledgeSearch>(serviceProvider => new CachedFinancialKnowledgeSearch(
+    serviceProvider.GetRequiredService<ChromaFinancialKnowledgeSearch>(),
+    serviceProvider.GetRequiredService<IApplicationCache>(),
+    serviceProvider.GetRequiredService<IOptions<CacheOptions>>(),
+    serviceProvider.GetRequiredService<IOptions<RagOptions>>()));
 builder.Services.AddScoped<FinancialKnowledgeContextProvider>();
 builder.Services.AddHttpClient(McpToolAdapter.FinanceHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddHttpClient(McpToolAdapter.KnowledgeFilesHttpClientName, client => client.Timeout = Timeout.InfiniteTimeSpan);
@@ -164,7 +214,9 @@ builder.Services.AddKeyedSingleton<IMcpToolAdapter>(McpToolAdapter.FinanceKey, (
         finance.TimeoutSeconds,
         finance.AllowedToolNames,
         serviceProvider.GetRequiredService<IHttpClientFactory>(),
-        serviceProvider.GetRequiredService<ILogger<McpToolAdapter>>());
+        serviceProvider.GetRequiredService<ILogger<McpToolAdapter>>(),
+        serviceProvider.GetRequiredService<IApplicationCache>(),
+        serviceProvider.GetRequiredService<IOptions<CacheOptions>>());
 });
 builder.Services.AddKeyedSingleton<IMcpToolAdapter>(McpToolAdapter.KnowledgeFilesKey, (serviceProvider, _) =>
 {
@@ -177,10 +229,16 @@ builder.Services.AddKeyedSingleton<IMcpToolAdapter>(McpToolAdapter.KnowledgeFile
         knowledge.TimeoutSeconds,
         knowledge.AllowedToolNames,
         serviceProvider.GetRequiredService<IHttpClientFactory>(),
-        serviceProvider.GetRequiredService<ILogger<McpToolAdapter>>());
+        serviceProvider.GetRequiredService<ILogger<McpToolAdapter>>(),
+        serviceProvider.GetRequiredService<IApplicationCache>(),
+        serviceProvider.GetRequiredService<IOptions<CacheOptions>>());
 });
 builder.Services.AddSingleton<FinanceMcpClient>();
-builder.Services.AddSingleton<IFinanceMcpClient>(serviceProvider => serviceProvider.GetRequiredService<FinanceMcpClient>());
+builder.Services.AddSingleton<IFinanceMcpClient>(serviceProvider => new CachedFinanceMcpClient(
+    serviceProvider.GetRequiredService<FinanceMcpClient>(),
+    serviceProvider.GetRequiredService<IApplicationCache>(),
+    serviceProvider.GetRequiredService<IOptions<CacheOptions>>(),
+    serviceProvider.GetRequiredService<TimeProvider>()));
 builder.Services.AddSingleton<IFinanceMcpRemoteClient>(serviceProvider => serviceProvider.GetRequiredService<FinanceMcpClient>());
 builder.Services.AddSingleton<KnowledgeFileMcpClient>();
 builder.Services.AddSingleton<IKnowledgeFileMcpRemoteClient, KnowledgeFileMcpHttpClient>();

@@ -9,6 +9,7 @@ flowchart LR
     API --> Finance[Finance MCP]
     API --> Knowledge[Knowledge File MCP]
     API --> Chroma[ChromaDB]
+    API --> Redis[(Redis cache)]
     Finance --> Postgres[(PostgreSQL)]
     Knowledge --> Files[data/knowledge]
 ```
@@ -35,7 +36,7 @@ Install Ollama on the Windows host and pull the configured `OLLAMA_MODEL`, which
 docker compose up --build -d
 ```
 
-Open `http://localhost:5173`. The API diagnostic port is `http://localhost:5260`, and pgAdmin is available locally at `http://localhost:5050`; normal browser calls use the Nginx same-origin `/api` proxy. The frontend, API, Finance MCP, Knowledge MCP, PostgreSQL, pgAdmin, ChromaDB, migration/seed job, and RAG ingestion job start in dependency order. Named PostgreSQL, pgAdmin, and ChromaDB volumes are preserved.
+Open `http://localhost:5173`. The API diagnostic port is `http://localhost:5260`, and pgAdmin is available locally at `http://localhost:5050`; normal browser calls use the Nginx same-origin `/api` proxy. The frontend, API, Finance MCP, Knowledge MCP, PostgreSQL, Redis, pgAdmin, ChromaDB, migration/seed job, and RAG ingestion job start in dependency order. Named PostgreSQL, pgAdmin, and ChromaDB volumes are preserved.
 
 Use `docker compose ps`, `docker compose logs --no-color`, and `docker compose down` for operations. Do not use `down -v` unless intentionally deleting local PostgreSQL and ChromaDB data.
 
@@ -56,7 +57,10 @@ Docker configuration selects Ollama with `AI_PROVIDER=Ollama` and `OLLAMA_MODEL=
 - Finance MCP is the only PostgreSQL owner. The API has no database connection string or Finance fallback; its dependency failure is a sanitized HTTP 503.
 - Knowledge File MCP permits only list/read beneath `data/knowledge`; it is mounted read-only in containers. Its Development-only fallback is disabled in Compose.
 - ChromaDB remains the semantic source retrieval and citation store. It does not contain finance transactions.
-- Frontend `5173`, API diagnostic `5260`, and pgAdmin `5050` are published on the local machine. PostgreSQL, ChromaDB, and MCP services remain internal; pgAdmin reaches PostgreSQL through the internal Docker network.
+- Finance read results, ChromaDB retrieval results, deterministic embedding vectors, approved MCP discovery names, and successful validated LLM intent classifications use provider-neutral HybridCache caching. Compose enables Redis at `redis:6379`; local `appsettings.json` uses memory-only caching. Set `CACHE_ENABLED=false` to bypass caching. Classification keys contain only fingerprints of normalized user text, provider/model, prompt and intent-set versions, safe session metadata, and prompt-risk policy. Malformed output, deterministic fallback routing, blocked requests, errors, cancellation, prompts, and final chat responses are not cached. Redis is internal, non-persistent, and never a source of truth, so a cache failure falls back to the authoritative dependency.
+- Frontend `5173`, API diagnostic `5260`, and pgAdmin `5050` are published locally. The automatically loaded development override also exposes Finance MCP at `127.0.0.1:18080` and Knowledge MCP at `127.0.0.1:18081` for local MCP diagnostics only. PostgreSQL, Redis, and ChromaDB remain internal; pgAdmin reaches PostgreSQL through the Docker network.
+
+See [How Caching Works](tasks/caching_integration/HOW_CACHING_WORK.md) for a plain-language walkthrough and [Caching Manual Tests](tasks/caching_integration/MANUAL_TEST_CASES_AND_CHECKS.md) for repeatable cache checks.
 
 ## Validation
 
