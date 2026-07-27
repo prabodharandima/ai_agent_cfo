@@ -218,7 +218,7 @@ public sealed class CfoOrchestratorAgent(
             {
                 Instructions = AgentDefinitions.CfoOrchestrator.SystemInstructions,
                 ResponseFormat = ChatResponseFormat.ForJsonSchema<IntentClassificationOutput>(
-                    StructuredOutputJsonOptions,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web),
                     "cfo_intent_classification",
                     "A validated CFO request intent.")
             },

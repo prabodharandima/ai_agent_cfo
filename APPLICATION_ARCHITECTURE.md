@@ -52,7 +52,7 @@ The LLM does not choose the database, MCP server, MCP tool, or financial calcula
 | Knowledge File MCP | Offers two restricted read-only file tools | API registers clients and checks readiness; current knowledge chat does not call it |
 | RAG initializer | One-shot `CfoAgent.Api --ingest-rag` process that reads Markdown and loads ChromaDB | Runs before the API container starts; it is not a chat request |
 | ChromaDB | Stores and searches indexed finance-document chunks | `FinancialKnowledgeAgent` reaches it through `IFinancialKnowledgeSearch` |
-| Redis | Optional distributed backing store for finance, RAG retrieval, and embedding-vector caching | Reached only through HybridCache; it is not a source of truth |
+| Redis | Optional distributed backing store for finance results, RAG retrieval, embeddings, MCP discovery, and validated intent classifications | Reached only through HybridCache; it is not a source of truth |
 | PostgreSQL | Stores products, sales, and budget targets | Owned and accessed only by Finance MCP |
 | Ollama | Local language model running on Windows | The only runtime `IChatClient`; API containers reach it through `host.docker.internal` |
 | pgAdmin | Optional browser administration tool for PostgreSQL | Operational tool only; not part of an application request |
@@ -184,6 +184,9 @@ flowchart TB
     Ollama[OllamaChatClient]
     FinanceClient[FinanceMcpClient]
     FinanceCache[CachedFinanceMcpClient]
+    RagCache[CachedFinancialKnowledgeSearch]
+    EmbeddingCache[CachedEmbeddingGenerator]
+    EmbeddingGenerator[DeterministicTokenHashEmbeddingGenerator]
     AppCache[IApplicationCache]
     HybridCache[HybridApplicationCache]
     Redis[(Redis optional)]
@@ -207,11 +210,16 @@ flowchart TB
     Knowledge --> VectorPort
 
     ChatPort --> ChatMiddleware --> Ollama
+    Orchestrator -->|validated intent only| AppCache
     FinancePort --> FinanceCache
     FinanceCache --> AppCache --> HybridCache
     HybridCache -. distributed mode .-> Redis
     FinanceCache --> FinanceClient --> McpAdapter
-    VectorPort --> ChromaAdapter --> ChromaClient
+    McpAdapter -->|approved tool names| AppCache
+    VectorPort --> RagCache --> ChromaAdapter --> ChromaClient
+    RagCache --> AppCache
+    ChromaAdapter --> EmbeddingCache --> EmbeddingGenerator
+    EmbeddingCache --> AppCache
 ```
 
 ### HTTP endpoint
@@ -252,13 +260,33 @@ Before it is injected into agents, `Program.cs` wraps the client with `AgentChat
 
 ### Application cache
 
-`IApplicationCache` is the provider-neutral cache port. `HybridApplicationCache` implements it with HybridCache and supports cache-entry removal for dependency-driven invalidation. `CachedFinanceMcpClient` decorates all six typed finance reads. `CachedFinancialKnowledgeSearch` decorates the ChromaDB retrieval port. `CachedEmbeddingGenerator` decorates the shared embedding-generator port. `McpToolAdapter` uses the same port for serializable approved tool-name snapshots. `CfoOrchestratorAgent` uses it only for successful, schema-validated LLM intent classifications. MCP SDK client/tool objects are never stored in HybridCache or Redis.
+Caching was added to avoid repeating recent safe reads and calculations. It is an optimization only: PostgreSQL, ChromaDB, MCP servers, and Ollama remain authoritative.
+
+`IApplicationCache` is the provider-neutral cache port. `HybridApplicationCache` implements it with .NET HybridCache and supports cache-entry removal for dependency-driven invalidation. HybridCache always provides a fast process-local memory tier. When distributed caching is enabled, `Program.cs` adds Redis as its secondary tier. Application and agent code never depend on Redis directly, so another distributed implementation can replace Redis at the composition root.
+
+The five cached operations are:
+
+| Cache layer | Cached successful value | Default TTL | Authoritative operation on a miss |
+| --- | --- | --- | --- |
+| Intent classification | A validated, non-`Unsupported` `CfoIntent` | 5 minutes | Ollama classification |
+| Finance result | Typed summaries, comparisons, products, historical totals, or budget targets | 1 minute to 1 hour by operation | Finance MCP and PostgreSQL |
+| MCP discovery | Approved tool-name strings only | 5 minutes | MCP `tools/list` |
+| Query embedding | One deterministic 256-value vector | 1 hour | Deterministic embedding generator |
+| RAG retrieval | Filtered chunks, metadata, distances, and warnings | 5 minutes | ChromaDB vector query |
+
+`CachedFinanceMcpClient` decorates all six typed finance reads. `CachedFinancialKnowledgeSearch` decorates the ChromaDB retrieval port. `CachedEmbeddingGenerator` decorates the shared embedding-generator port. `McpToolAdapter` uses the same port for serializable approved tool-name snapshots. `CfoOrchestratorAgent` uses it only for successful, schema-validated LLM intent classifications. MCP SDK client/tool objects are never stored in HybridCache or Redis.
+
+On a hit, HybridCache returns the saved value and skips that one authoritative operation. On a miss, the supplied factory runs and only its successful result is cached. If the cache infrastructure fails, `HybridApplicationCache` logs a safe warning and runs or returns the authoritative operation instead. The cache failure itself is not returned to the user.
 
 Finance keys contain only a version, operation, canonical arguments, and the injected current date where needed. RAG and embedding keys use safe SHA-256 fingerprints. MCP discovery keys fingerprint the discovery schema version, dependency identity, canonical `/mcp` endpoint, and sorted allow-list. Classification keys fingerprint normalized user text, provider, model, classifier-prompt version, allowed-intent-set version plus the current enum set, safe session metadata, and the prompt-risk policy. They never contain prompts, secrets, finance response data, retrieved content, raw embedding text, MCP arguments, tool results, or final chat responses. Only a successful non-`Unsupported` structured intent is cached; malformed output, deterministic fallback routing, prompt-risk blocks, provider errors, timeouts, and cancellation are not. Successful values use operation-specific TTLs. Exceptions and cancellation are rethrown and are not cached. If the cache itself fails, the authoritative Finance MCP, ChromaDB, embedding generator, MCP `tools/list`, or LLM classification operation runs normally.
 
 `Rag:IndexVersion` defaults to `v1`. Change it whenever the ChromaDB index is rebuilt or its content is replaced; the changed key namespace makes existing retrieval entries unreachable without requiring a Redis flush. Source metadata, distances, warnings, and therefore later citations are preserved in the cached retrieval result.
 
 With `Cache:Enabled=false`, the adapter bypasses HybridCache. With caching enabled and `Cache:UseDistributedCache=false`, it uses only process-local memory. Compose enables the Redis backing store. Redis has no persistence or application-data volume and is not an API startup or health dependency.
+
+Invalidation is deliberately simple. Entries expire by TTL; embedding, discovery, classification, and RAG keys include explicit version components; MCP connection/tool failures remove the discovery snapshot before reconnecting. There is no background polling or event-driven invalidation. A finance result can therefore remain usable until its short operation-specific TTL expires after source data changes.
+
+The current application is a local single-user MVP and has no tenant or authorization identity. If tenant- or user-scoped data is introduced, every affected cache key must include a stable tenant/authorization scope, or that operation must not be cached. Hashing a prompt alone is not sufficient isolation for a future multi-tenant deployment.
 
 ### Vector-search adapter
 
@@ -428,15 +456,17 @@ The prompt "What does gross margin mean?" is not guaranteed to reach Knowledge w
 
 ### 8.1 Finance request: sales summary
 
-Example: "Give me the sales summary since yesterday."
+Example: "Give me this month's sales summary."
 
 ```mermaid
 sequenceDiagram
     actor User
     participant HTTP as ChatEndpoints
     participant CFO as CfoOrchestratorAgent
+    participant ClassCache as HybridCache classification
+    participant LLM as IChatClient / Ollama
     participant Sales as SalesAnalysisAgent
-    participant LLM as IChatClient
+    participant FinanceCache as HybridCache finance
     participant Client as FinanceMcpClient
     participant Adapter as McpToolAdapter
     participant FMCP as Finance MCP
@@ -445,19 +475,31 @@ sequenceDiagram
 
     User->>HTTP: POST /api/chat
     HTTP->>CFO: HandleAsync(message, RequestAborted)
-    CFO->>LLM: Classify bounded intent
-    LLM-->>CFO: SalesSummary
+    CFO->>ClassCache: Get validated intent by safe fingerprint
+    alt Classification cache miss
+        ClassCache->>LLM: Run bounded classification factory
+        LLM-->>ClassCache: Valid SalesSummary
+        ClassCache-->>CFO: Cache and return SalesSummary
+    else Classification cache hit
+        ClassCache-->>CFO: SalesSummary
+    end
     CFO->>Sales: GetWeeklySummaryAsync
     Sales->>LLM: Request JSON startDate and endDate with current date
     LLM-->>Sales: {startDate, endDate}
-    Sales->>Sales: Canonicalize standard relative periods or validate ISO dates
-    Sales->>Client: GetSalesSummaryAsync(validated period)
-    Client->>Adapter: CallApprovedToolAsync(get_sales_summary, canonical args)
-    Adapter->>FMCP: Initialize and tools/list if not cached
-    Adapter->>FMCP: tools/call get_sales_summary
-    FMCP->>PG: Read and aggregate sales
-    PG-->>FMCP: Rows
-    FMCP-->>Sales: Typed SalesSummary
+    Sales->>Sales: Parse, bound, and canonicalize dates in C#
+    Sales->>FinanceCache: Get typed summary by canonical dates
+    alt Finance cache miss
+        FinanceCache->>Client: Run authoritative finance factory
+        Client->>Adapter: CallApprovedToolAsync(get_sales_summary, args)
+        Adapter->>FMCP: Handshake and tools/list when needed
+        Adapter->>FMCP: tools/call get_sales_summary
+        FMCP->>PG: Read and aggregate sales
+        PG-->>FMCP: Rows and totals
+        FMCP-->>FinanceCache: Typed SalesSummary
+        FinanceCache-->>Sales: Cache and return summary
+    else Finance cache hit
+        FinanceCache-->>Sales: Typed SalesSummary
+    end
     Sales->>LLM: Explain verified result only
     LLM-->>Sales: Executive prose
     Sales-->>CFO: AgentResult with structured data
@@ -467,7 +509,7 @@ sequenceDiagram
     HTTP-->>User: ChatResponse JSON
 ```
 
-The LLM interprets the user's time wording only. It does not calculate financial values, select the MCP server/tool, or bypass the C# validation.
+Each HybridCache lookup checks process memory and then Redis when distributed caching is enabled. The model interprets the month's dates and writes prose, but it does not calculate financial values, select the MCP server/tool, or bypass C# validation. The final prose is not cached.
 
 ### 8.2 Finance request: top products
 
@@ -517,34 +559,55 @@ sequenceDiagram
 
 ### 8.3 Knowledge request
 
-Tested example: "What is the annual sales target and what assumptions were used?"
+Example: "What is the annual sales target?"
 
 ```mermaid
 sequenceDiagram
     actor User
     participant API as ChatEndpoints
     participant CFO as CfoOrchestratorAgent
+    participant ClassCache as HybridCache classification
     participant Agent as FinancialKnowledgeAgent
+    participant Context as FinancialKnowledgeContextProvider
+    participant RagCache as HybridCache RAG retrieval
     participant Search as ChromaFinancialKnowledgeSearch
+    participant EmbedCache as HybridCache embedding
+    participant Embed as Deterministic embedding generator
     participant Chroma as ChromaDB
-    participant FileMCP as Knowledge File MCP
     participant LLM as IChatClient
     participant Compose as AgentResultComposer
 
     User->>API: POST knowledge question
     API->>CFO: HandleAsync
-    CFO->>LLM: Classify bounded intent
-    LLM-->>CFO: Knowledge
+    CFO->>ClassCache: Get validated intent by safe fingerprint
+    alt Classification cache miss
+        ClassCache->>LLM: Run bounded classification factory
+        LLM-->>ClassCache: Valid Knowledge intent
+        ClassCache-->>CFO: Cache and return Knowledge
+    else Classification cache hit
+        ClassCache-->>CFO: Knowledge
+    end
     CFO->>Agent: AnswerAsync
-    Note over Agent,FileMCP: Knowledge File MCP is not called in this chat path
-    Agent->>Search: RetrieveAsync(question, topK 3)
-    Search->>Search: Create deterministic 256-value embedding
-    Search->>Chroma: Query collection with embedding
-    Chroma-->>Search: Documents, metadata, distances
-    Search->>Search: Threshold, filter, sort, deduplicate
-    Search-->>Agent: Relevant sources
-    Agent->>Agent: Build context capped at 4000 characters
-    Agent->>LLM: Answer only from retrieved context
+    Agent->>Context: Prepare bounded RAG context
+    Context->>RagCache: Get retrieval by safe query fingerprint
+    alt RAG retrieval cache miss
+        RagCache->>Search: Run authoritative retrieval factory
+        Search->>EmbedCache: Get query embedding by safe fingerprint
+        alt Embedding cache miss
+            EmbedCache->>Embed: Create deterministic 256-value vector
+            Embed-->>EmbedCache: Vector
+        end
+        EmbedCache-->>Search: Vector
+        Search->>Chroma: Query collection with vector
+        Chroma-->>Search: Chunks, metadata, and distances
+        Search->>Search: Threshold, sort, and deduplicate
+        Search-->>RagCache: Retrieval result with sources
+        RagCache-->>Context: Cache and return result
+    else RAG retrieval cache hit
+        RagCache-->>Context: Retrieval result with sources
+    end
+    Context-->>Agent: Context capped at 4000 characters
+    Agent->>LLM: Answer only from prepared context
     LLM-->>Agent: Grounded prose
     Agent-->>CFO: AgentResult with deterministic citations
     CFO->>Compose: Compose one result
@@ -552,6 +615,8 @@ sequenceDiagram
     CFO-->>API: AgentResult
     API-->>User: ChatResponse with sources
 ```
+
+The retrieval cache retains the source metadata and distances needed to rebuild citations. Knowledge File MCP is not called in this chat path; ChromaDB remains the semantic retrieval store. Neither the retrieved context nor the final answer is used as a readable cache key.
 
 ### 8.4 Mixed request
 
@@ -623,6 +688,28 @@ sequenceDiagram
     API->>Errors: Global exception handling
     Errors-->>User: Sanitized HTTP 503 Problem Details
 ```
+
+### 8.6 Redis or cache-provider failure
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant API as CfoAgent.Api
+    participant Cache as HybridApplicationCache
+    participant Redis as Redis
+    participant Dependency as Finance MCP or ChromaDB
+
+    User->>API: Submit supported request
+    API->>Cache: GetOrCreateAsync
+    Cache-xRedis: Distributed cache operation fails
+    Cache->>Cache: Log safe failed-open warning
+    Cache->>Dependency: Run authoritative operation
+    Dependency-->>Cache: Successful result
+    Cache-->>API: Return authoritative result
+    API-->>User: Normal response
+```
+
+Redis is never the source of truth. A cache-provider error is logged with the safe cache key and failure type, then the authoritative factory runs. Authoritative dependency errors and caller cancellation are still propagated; they are not mistaken for cache failures or cached.
 
 ## 9. MCP integration
 
@@ -739,7 +826,7 @@ Compose runs `finance-db-init --seed` once before Finance MCP starts. Seeding is
 
 ### Health and network access
 
-`FinanceDatabaseReadinessHealthCheck` verifies database connectivity, no pending migrations, and readable access to all three tables. Finance MCP exposes `/health/live` and `/health/ready` internally. Its port is not published to the host by the main Compose file.
+`FinanceDatabaseReadinessHealthCheck` verifies database connectivity, no pending migrations, and readable access to all three tables. Finance MCP exposes `/health/live` and `/health/ready`. The base Compose file keeps it internal; the automatically loaded development override publishes it only on `127.0.0.1:18080` for local MCP diagnostics.
 
 ## 11. Knowledge File MCP server
 
@@ -961,7 +1048,7 @@ flowchart TD
 | ChromaDB unavailable                  | `ChromaDependencyException` through `VectorSearchDependencyException`, HTTP 503                                |
 | No relevant knowledge                 | Successful Knowledge result with a fixed insufficient-knowledge answer, not 503                                |
 | AI provider unavailable or invalid    | Sanitized provider HTTP 503                                                                                    |
-| Invalid Sales Summary date-range JSON | C# prevents the Finance MCP call; the current `InvalidOperationException` mapping returns a sanitized HTTP 503 |
+| Invalid Sales Summary date-range JSON | C# prevents the Finance MCP call; `AiProviderException` with `InvalidResponse` returns a sanitized HTTP 503 |
 | AI provider timeout                   | HTTP 504                                                                                                       |
 | Caller cancellation                   | Propagated; not converted to fallback or 503                                                                   |
 
@@ -1063,11 +1150,12 @@ flowchart TB
 
 ### Networks and ports
 
-- `backend` is an internal Docker network. PostgreSQL, both MCP services, and ChromaDB are not published to the host.
+- `backend` is an internal Docker network. PostgreSQL, Redis, and ChromaDB are not published to the host.
 - `edge` connects frontend and API.
 - Frontend is published on configurable port 5173 by default.
 - API diagnostic access is published on configurable port 5260.
 - pgAdmin is published only on host loopback port 5050 by default.
+- The automatically loaded `docker-compose.override.yml` puts both MCP services on `edge` and publishes Finance MCP on `127.0.0.1:18080` and Knowledge MCP on `127.0.0.1:18081`. These loopback bindings support local Postman/MCP inspection and are not reachable from other hosts.
 - Ollama remains on Windows and is reached through `host.docker.internal`.
 
 ### Startup order
@@ -1085,14 +1173,84 @@ PostgreSQL, ChromaDB, and pgAdmin use named volumes. Knowledge files use a read-
 
 ## 18. Example scenarios
 
-| Example                                                           | Detected intent  | Selected agent                       | External data                                           | Tool or search                                            | Composition                                       |
-| ----------------------------------------------------------------- | ---------------- | ------------------------------------ | ------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------- |
-| "Give me this week's sales summary."                              | Sales Summary    | Sales Analysis                       | LLM date interpretation, then Finance MCP -> PostgreSQL | validated `startDate`/`endDate`, then `get_sales_summary` | Single result returned unchanged                  |
-| "Compare this week's sales with last week."                       | Sales Comparison | Sales Analysis                       | Finance MCP -> PostgreSQL                               | `compare_sales_periods`                                   | Single result returned unchanged                  |
-| "Show me the top five products this month."                       | Top Products     | Sales Analysis                       | Finance MCP -> PostgreSQL                               | `get_top_products`                                        | Single result returned unchanged                  |
-| "Give me the sales forecast for the next five years."             | Forecast         | Forecasting                          | Finance MCP historical totals                           | `get_historical_sales`, then C# regression                | Single result with forecasts and assumptions      |
-| "What is the annual sales target and what assumptions were used?" | Knowledge        | Financial Knowledge                  | ChromaDB                                                | Top-3 vector search, distance threshold                   | Single grounded result with citations             |
-| "Give me the sales forecast with assumptions and risks."          | Mixed            | Forecasting plus Financial Knowledge | Finance MCP and ChromaDB                                | `get_historical_sales` plus vector search                 | Composer joins two answers and structured results |
+This view shows which parts a user reaches. HybridCache is one application cache API; Redis is only its optional shared backing store.
+
+```mermaid
+flowchart LR
+    User[CFO or user] --> API[Chat API]
+    API --> Orchestrator[CFO orchestrator]
+    Orchestrator --> Sales[Sales agent]
+    Orchestrator --> Forecast[Forecast agent]
+    Orchestrator --> Knowledge[Knowledge agent]
+    Orchestrator --> Cache[HybridCache through IApplicationCache]
+    Sales --> Cache
+    Forecast --> Cache
+    Knowledge --> Cache
+    Cache -. optional shared tier .-> Redis[(Redis)]
+    Sales --> FinanceMCP[Finance MCP]
+    Forecast --> FinanceMCP
+    Knowledge --> Chroma[(ChromaDB)]
+    Orchestrator --> LLM[Ollama through IChatClient]
+    Sales --> LLM
+    Forecast --> LLM
+    Knowledge --> LLM
+```
+
+### Use case 1: Sales summary
+
+Example: "Give me this month's sales summary."
+
+1. The endpoint loads the compact conversation context and asks the orchestrator to handle the request.
+2. The orchestrator checks the classification cache. A hit returns `SalesSummary`; a miss asks Ollama and caches only a valid non-`Unsupported` intent.
+3. `SalesAnalysisAgent` asks Ollama for the requested inclusive dates because this is not the special deterministic current-week phrase. C# parses, bounds, and canonicalizes those dates.
+4. `CachedFinanceMcpClient` checks the finance cache using the canonical dates. A hit returns the typed result. A miss calls `get_sales_summary` through Finance MCP, which reads PostgreSQL, and then caches the successful typed result.
+5. Ollama explains only the verified result. `AgentResultComposer` returns the single worker result unchanged.
+
+The final prose, date-interpretation response, failures, and cancellation are not cached.
+
+### Use case 2: RAG knowledge query
+
+Example: "What is the annual sales target?"
+
+1. Classification resolves the request to `Knowledge`, using the classification cache when possible.
+2. `FinancialKnowledgeAgent` asks `FinancialKnowledgeContextProvider` to prepare context.
+3. `CachedFinancialKnowledgeSearch` checks the RAG retrieval cache. A hit already includes filtered chunks, source metadata, distances, and warnings.
+4. On a retrieval miss, `ChromaFinancialKnowledgeSearch` requests the query vector. `CachedEmbeddingGenerator` reuses the deterministic vector when available or creates and caches a new 256-value vector.
+5. ChromaDB is queried only when the retrieval cache misses. The adapter applies the distance threshold, sorting, and duplicate control, then the retrieval result is cached.
+6. The context provider builds bounded untrusted context. Ollama answers from that context, and the agent returns the preserved citations.
+
+This path does not call Knowledge File MCP. That service protects direct file list/read operations; ChromaDB owns semantic chat retrieval.
+
+### Use case 3: Follow-up conversation
+
+Example after a successful dated request: "Compare that with last month."
+
+1. `ChatEndpoints` loads prior resolved response metadata and date periods from `InMemoryAgentSessionStore` using `conversationId`.
+2. That compact session context is included in the classification prompt and in the classification cache fingerprint. Raw previous prompts and answers are not stored in the session or cache key.
+3. The orchestrator chooses Sales Analysis only if the bounded LLM output or deterministic rules identify a supported comparison intent. The session is context, not authority.
+4. The worker uses its deterministic comparison operation and finance cache. On a miss, Finance MCP calculates the two periods from the API-supplied current date and reads PostgreSQL.
+5. The result is explained and returned. A session turn is recorded only after successful completion.
+
+The current session feature does not perform unrestricted reference resolution. Follow-ups that remain ambiguous can still be classified as `Unsupported`.
+If this example is classified as `SalesComparison`, the current worker compares the current week with the previous week; it does not implement arbitrary month-to-month comparison. The session context helps classification but does not create a new finance operation.
+
+### Use case 4: Redis unavailable
+
+1. A cache-enabled operation calls `IApplicationCache`.
+2. HybridCache attempts its local tier and, when configured, Redis. If the cache operation throws, `HybridApplicationCache` logs a safe failed-open warning.
+3. The authoritative factory runs: Finance MCP for finance, ChromaDB for retrieval, the deterministic generator for embeddings, MCP `tools/list` for discovery, or Ollama for classification.
+4. A successful authoritative result continues through the normal response flow. Redis does not become an API health or startup dependency.
+
+If the authoritative dependency also fails, its existing typed error is propagated and sanitized normally. Cache fallback does not hide Finance MCP, ChromaDB, Ollama, timeout, or caller-cancellation failures.
+
+Other supported examples remain:
+
+| Example | Intent | Worker and authoritative operation |
+| --- | --- | --- |
+| "Compare this week's sales with last week." | Sales Comparison | Sales Analysis; `compare_sales_periods` |
+| "Show me the top five products this month." | Top Products | Sales Analysis; `get_top_products` |
+| "Give me the sales forecast for the next five years." | Forecast | Forecasting; `get_historical_sales`, then deterministic C# regression |
+| "Give me the sales forecast with assumptions and risks." | Mixed | Forecasting plus Financial Knowledge; stable C# composition |
 
 The annual-target example does not call Finance MCP `get_budget_target` in the current chat flow. It reads indexed Markdown through ChromaDB.
 

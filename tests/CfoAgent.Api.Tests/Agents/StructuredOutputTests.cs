@@ -47,7 +47,7 @@ public sealed class StructuredOutputTests
         var responseFormatSeen = false;
         using var client = new TestChatClient((prompt, options, _) =>
         {
-            if (prompt.Contains("STRUCTURED_SALES_PERIOD_OUTPUT", StringComparison.Ordinal))
+            if (prompt.Contains("SALES_SUMMARY_PERIOD_REQUEST:", StringComparison.Ordinal))
             {
                 responseFormatSeen = options?.ResponseFormat is ChatResponseFormatJson;
                 return Task.FromResult("{\"startDate\":\"2026-07-01\",\"endDate\":\"2026-07-15\"}");

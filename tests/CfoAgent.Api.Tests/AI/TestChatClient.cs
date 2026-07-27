@@ -78,11 +78,6 @@ internal sealed class TestChatClient : IChatClient
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (prompt.Contains("STRUCTURED_SALES_PERIOD_OUTPUT", StringComparison.Ordinal))
-        {
-            return Task.FromResult(ResolveSalesSummaryPeriod(prompt));
-        }
-
         if (prompt.Contains("STRUCTURED_INTENT_OUTPUT", StringComparison.Ordinal))
         {
             return Task.FromResult(JsonSerializer.Serialize(new { intent = Classify(prompt) }));

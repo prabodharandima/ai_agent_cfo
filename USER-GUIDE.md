@@ -220,13 +220,16 @@ Each command should return HTTP 200. `/health/live` confirms the API process is 
 
 ## 7. Verify MCP services
 
-MCP, PostgreSQL, and ChromaDB ports intentionally are not published to Windows. This is expected:
+PostgreSQL, Redis, and ChromaDB ports intentionally are not published to Windows. The checked-in `docker-compose.override.yml` is loaded automatically and publishes the MCP endpoints only on Windows loopback for local protocol diagnostics:
+
+- Finance MCP: `http://127.0.0.1:18080/mcp`
+- Knowledge MCP: `http://127.0.0.1:18081/mcp`
 
 ```powershell
 docker compose ps
 ```
 
-The frontend port `5173`, API diagnostic port `5260`, and pgAdmin UI port `5050` should appear as host mappings. Finance MCP, Knowledge MCP, PostgreSQL, and ChromaDB should show only their internal container ports.
+The frontend port `5173`, API diagnostic port `5260`, pgAdmin UI port `5050`, and loopback-only MCP diagnostic ports should appear as host mappings. PostgreSQL, Redis, and ChromaDB should show only their internal container ports. Binding MCP diagnostics to `127.0.0.1` prevents access from other machines on the network.
 
 Use API readiness and logs to verify the MCP connections:
 

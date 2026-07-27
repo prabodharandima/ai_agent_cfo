@@ -39,7 +39,7 @@ flowchart LR
     Knowledge --> Files[data/knowledge read-only]
 ```
 
-Docker Compose publishes the frontend on `5173` and retains API port `5260` as a configurable diagnostic port. PostgreSQL, ChromaDB, Redis, Finance MCP, and Knowledge MCP have no host-published ports. `backend` is internal; the API and frontend also share `edge`. PostgreSQL and ChromaDB use named volumes. Redis is an expendable cache with persistence disabled. Finance migrations/seeding and RAG ingestion are one-shot services that run before the application becomes ready.
+Docker Compose publishes the frontend on `5173` and retains API port `5260` as a configurable diagnostic port. The automatically loaded `docker-compose.override.yml` also publishes Finance MCP on loopback-only `127.0.0.1:18080` and Knowledge MCP on `127.0.0.1:18081` for local protocol diagnostics. PostgreSQL, ChromaDB, and Redis have no host-published ports. `backend` is internal; the API and frontend also share `edge`. PostgreSQL and ChromaDB use named volumes. Redis is an expendable cache with persistence disabled. Finance migrations/seeding and RAG ingestion are one-shot services that run before the application becomes ready.
 
 ## Configuration and operations
 

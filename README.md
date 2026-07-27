@@ -58,7 +58,9 @@ Docker configuration selects Ollama with `AI_PROVIDER=Ollama` and `OLLAMA_MODEL=
 - Knowledge File MCP permits only list/read beneath `data/knowledge`; it is mounted read-only in containers. Its Development-only fallback is disabled in Compose.
 - ChromaDB remains the semantic source retrieval and citation store. It does not contain finance transactions.
 - Finance read results, ChromaDB retrieval results, deterministic embedding vectors, approved MCP discovery names, and successful validated LLM intent classifications use provider-neutral HybridCache caching. Compose enables Redis at `redis:6379`; local `appsettings.json` uses memory-only caching. Set `CACHE_ENABLED=false` to bypass caching. Classification keys contain only fingerprints of normalized user text, provider/model, prompt and intent-set versions, safe session metadata, and prompt-risk policy. Malformed output, deterministic fallback routing, blocked requests, errors, cancellation, prompts, and final chat responses are not cached. Redis is internal, non-persistent, and never a source of truth, so a cache failure falls back to the authoritative dependency.
-- Frontend `5173`, API diagnostic `5260`, and pgAdmin `5050` are published on the local machine. PostgreSQL, Redis, ChromaDB, and MCP services remain internal; pgAdmin reaches PostgreSQL through the internal Docker network.
+- Frontend `5173`, API diagnostic `5260`, and pgAdmin `5050` are published locally. The automatically loaded development override also exposes Finance MCP at `127.0.0.1:18080` and Knowledge MCP at `127.0.0.1:18081` for local MCP diagnostics only. PostgreSQL, Redis, and ChromaDB remain internal; pgAdmin reaches PostgreSQL through the Docker network.
+
+See [How Caching Works](tasks/caching_integration/HOW_CACHING_WORK.md) for a plain-language walkthrough and [Caching Manual Tests](tasks/caching_integration/MANUAL_TEST_CASES_AND_CHECKS.md) for repeatable cache checks.
 
 ## Validation
 
